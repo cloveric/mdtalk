@@ -43,19 +43,24 @@ mdtalk --demo
 1. **Orchestrator（编排器）** `src/orchestrator.rs`
    - 管理 review 对话的生命周期
    - **两层循环**：外层为轮次（rounds，每轮=达成共识+代码修改），内层为讨论（exchanges，A发言+B发言+共识检测）
+   - **ExchangeKind 枚举**：`InitialReview` / `RoundReReview` / `FollowUp`，由 `classify_exchange(round, exchange)` 决定 prompt 类型
+   - `should_append_round_header(exchange)` 确保每轮只写一次标题（修复了之前传 `total_exchange` 导致的语义错误）
    - 通过 `tokio::sync::watch` 向 Dashboard 推送状态
    - 通过 `tokio::sync::oneshot` 接收 Dashboard 的开始信号
    - 30 秒心跳机制，汇报 agent 运行状态
    - 状态机：`Init → AgentAReviewing → AgentBResponding → CheckConsensus → (loop or ApplyChanges) → Done`
+   - 包含单元测试验证 exchange 分类和 round header 逻辑
 
 2. **Agent Runner（Agent 运行器）** `src/agent.rs`
    - 通过 `tokio::process::Command` 异步调用 CLI 工具
    - 支持 claude (`claude -p "prompt" --output-format text`) 和 codex (`codex exec --full-auto "prompt"`)
+   - **Codex sandbox 注意**：`--full-auto` 默认只给 `read-only` sandbox，无法修改代码。实际需要 `--dangerously-bypass-approvals-and-sandbox` 才能让 Codex 在 apply 阶段写文件
    - Windows 下通过 `cmd /C` 包装 npm 安装的 CLI 工具
    - 移除 `CLAUDECODE` 环境变量防止嵌套 session 检测
    - **并发读取 stdout/stderr + wait**，避免管道缓冲区满导致的死锁
-   - 支持超时控制（默认 600 秒）
+   - 支持超时控制（默认 900 秒）
    - Windows 进程树 kill（`taskkill /T /F /PID`）
+   - 包含单元测试验证 CLI 参数构建
 
 3. **Conversation（对话文件）** `src/conversation.rs`
    - 使用 `OpenOptions::append()` 追加写入
@@ -64,9 +69,10 @@ mdtalk --demo
 
 4. **Consensus（共识检测）** `src/consensus.rs`
    - 关键词匹配 + 否定前缀检测（"don't agree" 不算共识）
+   - **词边界检查**：避免 "whatnot agree" 等子串误匹配（`ends_with_negation()` 函数）
    - 支持中英文否定词（don't, wouldn't, shouldn't, 不, 未, 无法 等）
    - 可配置关键词列表
-   - 5 个单元测试覆盖
+   - 7 个单元测试覆盖（含词边界测试、多空格否定测试）
 
 5. **Dashboard（仪表盘）** `src/dashboard/`
    - ratatui + crossterm 实现的 TUI
@@ -140,8 +146,11 @@ mdtalk/
 // Claude Code
 Command::new("cmd").args(["/C", "claude", "-p", &prompt, "--output-format", "text"])
 
-// Codex CLI
+// Codex CLI（审查阶段）
 Command::new("cmd").args(["/C", "codex", "exec", "--full-auto", &prompt])
+
+// Codex CLI（需要写文件时，如 apply 阶段）
+Command::new("cmd").args(["/C", "codex", "exec", "--dangerously-bypass-approvals-and-sandbox", &prompt])
 
 // 通用 agent（直接传 prompt 作为参数）
 Command::new(&command).args([&prompt])
@@ -151,6 +160,7 @@ Command::new(&command).args([&prompt])
 - Windows 上 npm 安装的 CLI 是 `.cmd` 脚本，必须通过 `cmd /C` 调用
 - 必须 `.env_remove("CLAUDECODE")` 否则 Claude 检测到嵌套 session 会报错
 - Codex 的 `receiving-code-review` 技能会拦截 "review response" 类 prompt，需要将 prompt 表述为 "independent code review" 任务
+- **Codex sandbox 陷阱**：`--full-auto` 文档说是 `workspace-write`，但实际运行时 sandbox 为 `read-only`。必须用 `--dangerously-bypass-approvals-and-sandbox` 才能让 Codex 真正修改文件
 
 ## 配置文件 (mdtalk.toml)
 
@@ -161,12 +171,12 @@ path = "."                   # 要审查的目标项目路径
 [agent_a]
 name = "claude"
 command = "claude"
-timeout_secs = 600
+timeout_secs = 900
 
 [agent_b]
 name = "codex"
 command = "codex"
-timeout_secs = 600
+timeout_secs = 900
 
 [review]
 max_rounds = 1               # 轮次数（每轮 = 共识 + 代码修改）
@@ -212,9 +222,18 @@ refresh_rate_ms = 500
 - [x] Dashboard 阻塞 tokio 线程导致 orchestrator 无法启动（改用 spawn_blocking）
 - [x] 日志文件缓冲丢失（改用 LineWriter 确保每行立即刷新）
 
+### 已修复（本次更新）
+- [x] Codex sandbox 权限问题（`--full-auto` 实际为 `read-only`，改用 `--dangerously-bypass-approvals-and-sandbox`）
+- [x] Agent B prompt 重写（Codex 只报告"已读完"不输出审查内容，改为明确要求输出完整审查文本）
+- [x] Agent 超时从 300 秒增加到 900 秒
+- [x] `append_round_header` 语义错误（传入 `total_exchange` 而非 `round`，导致对话标题错误）
+- [x] Orchestrator exchange 分类重构（`ExchangeKind` 枚举 + `classify_exchange()` 函数）
+- [x] 共识检测词边界检查（避免 "whatnot agree" 误匹配）
+- [x] 新增单元测试：orchestrator（3 个）、consensus（2 个新增）、agent（1 个）
+
 ### 待改进（功能增强）
 - [ ] `dashboard.refresh_rate_ms` 配置项未生效（tick_rate 硬编码 100ms）
 - [ ] 对话文件写入目标项目目录（应写入 sessions/ 或 mdtalk 自身目录）
 - [ ] 无 session 管理（每次覆盖 conversation.md）
 - [ ] Agent args 硬编码（无模板系统）
-- [ ] 测试覆盖扩展（目前仅 consensus.rs 有 5 个单元测试）
+- [ ] Codex apply 阶段应使用不同于审查阶段的 sandbox 参数（当前统一使用 `--full-auto`）

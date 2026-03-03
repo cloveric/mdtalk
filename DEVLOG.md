@@ -103,6 +103,49 @@
   2. `main.rs` 中从 `tokio::spawn` 改为 `tokio::task::spawn_blocking`，使 dashboard 运行在独立的阻塞线程池上
   3. 日志文件改用 `Mutex<LineWriter<File>>`，确保每行立即刷新到磁盘
 
+## 2026-03-03: Codex Sandbox 修复 + 多 Agent 审查改进
+
+### Codex Sandbox 权限问题（关键发现）
+
+**问题**：Codex 在 apply 阶段（达成共识后修改代码）完全不修改任何文件。
+
+**诊断过程**：
+1. 最初以为是 prompt 问题 — Codex 回复"已完成阅读"但不输出审查内容 → 重写 Agent B prompt
+2. 重写后 Codex 能正常输出审查内容，但 apply 阶段仍然不改代码
+3. 检查 `mdtalk.log` 中的 Codex stderr，发现关键信息：`sandbox: read-only`
+4. 尝试 `-s workspace-write` 显式覆盖 → 无效，仍然 `read-only`
+5. 尝试去掉 `--full-auto` 只用 `-s workspace-write` → 无效
+6. 最终使用 `--dangerously-bypass-approvals-and-sandbox` → 成功！
+
+**根因**：Codex `--full-auto` 的文档说是 `--sandbox workspace-write`，但实际运行时 sandbox 降级为 `read-only`。可能是 Codex 配置文件中的 `trusted_projects` 或版本行为差异导致。只有 `--dangerously-bypass-approvals-and-sandbox`（对应交互模式的 `--yolo`）才能真正给 Codex 写权限。
+
+**修复**：`agent.rs` 中 Codex 参数改为 `exec --dangerously-bypass-approvals-and-sandbox`
+
+### Agent B Prompt 重写
+
+**问题**：Codex 收到审查 prompt 后只输出"已完成阅读并建立上下文"，不输出实际审查分析。
+
+**原因**：原 prompt 分两步描述任务（"请阅读文件...然后分析..."），Codex `exec --full-auto` 模式把读文件当成任务本身，执行完第一步就认为完成。
+
+**修复**：重写 prompt 为明确的指令风格：
+- 定义角色："你是一位独立的代码审查专家"
+- 明确步骤：读取 → 核实 → 输出
+- 强调输出要求："你必须直接输出完整的审查文本，不要只报告你读了哪些文件"
+
+### 超时调整
+- 默认 timeout 从 300 秒增加到 900 秒（15 分钟）
+- Claude 审查通常 70-80 秒，Codex 验证通常 130-280 秒，300 秒不够用
+
+### Codex 成功修改代码（首次）
+使用 `--dangerously-bypass-approvals-and-sandbox` 后，Codex 在 apply 阶段成功修改了 9 个文件（+266/-104 行）：
+- `orchestrator.rs`：重构 exchange 分类为 `ExchangeKind` 枚举，修复 `append_round_header` 语义错误，新增单元测试
+- `consensus.rs`：新增词边界检查（避免 "whatnot" 误匹配），新增 2 个测试
+- `agent.rs`：新增单元测试验证 CLI 参数构建
+- `dashboard/ui.rs`：UI 布局改进
+- 其他文件：小修复和格式化
+
+编译通过，0 错误。
+
 ## 审查发现汇总
 
 ### 首次自审查（Claude + Codex）
