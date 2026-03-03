@@ -48,7 +48,9 @@ mdtalk --demo
    - 通过 `tokio::sync::watch` 向 Dashboard 推送状态
    - 通过 `tokio::sync::oneshot` 接收 Dashboard 的开始信号
    - 30 秒心跳机制，汇报 agent 运行状态
-   - 状态机：`Init → AgentAReviewing → AgentBResponding → CheckConsensus → (loop or ApplyChanges) → Done`
+   - 通过 `tokio::sync::mpsc` 接收 Dashboard 的 apply 确认命令（手动 apply 模式）
+   - 状态机：`Init → AgentAReviewing → AgentBResponding → CheckConsensus → [WaitingForApply →] ApplyChanges → Done`
+   - `Phase::WaitingForApply`：手动 apply 模式下，达成共识后暂停等待用户按 Enter 确认
    - 包含单元测试验证 exchange 分类和 round header 逻辑
 
 2. **Agent Runner（Agent 运行器）** `src/agent.rs`
@@ -76,7 +78,9 @@ mdtalk --demo
 
 5. **Dashboard（仪表盘）** `src/dashboard/`
    - ratatui + crossterm 实现的 TUI
-   - **启动确认屏幕**：显示配置摘要，按 Enter 开始审查
+   - **启动确认屏幕**：5 个配置字段（Agent A/B、轮次、讨论次数、自动修改开关）
+   - **自动修改开关**（`auto_apply`）：设为"否"时，达成共识后暂停等待用户按 Enter 确认再执行代码修改
+   - **重新开始**：会话结束后按 `r` 键可重新开始（回到启动屏），通过 `DashboardExit::Restart` + `main.rs` 循环实现
    - 状态栏（轮次+讨论进度）+ 对话预览（可滚动）+ Agent 状态面板 + 日志面板
    - 使用 `tokio::task::spawn_blocking` 运行，避免阻塞 tokio 异步线程
    - 支持 `--demo` 模式用 TestBackend 渲染预览
@@ -98,6 +102,8 @@ mdtalk --demo
 │  │              ↙         ↘                       │    │
 │  │        达成共识      未达成共识 → 继续讨论     │    │
 │  └────────────────────────────────────────────────┘    │
+│                    ↓                                    │
+│      [手动模式] 等待用户按 Enter 确认                   │
 │                    ↓                                    │
 │           Agent B 应用代码修改                          │
 │                    ↓                                    │
@@ -222,7 +228,7 @@ refresh_rate_ms = 500
 - [x] Dashboard 阻塞 tokio 线程导致 orchestrator 无法启动（改用 spawn_blocking）
 - [x] 日志文件缓冲丢失（改用 LineWriter 确保每行立即刷新）
 
-### 已修复（本次更新）
+### 已修复（最近更新）
 - [x] Codex sandbox 权限问题（`--full-auto` 实际为 `read-only`，改用 `--dangerously-bypass-approvals-and-sandbox`）
 - [x] Agent B prompt 重写（Codex 只报告"已读完"不输出审查内容，改为明确要求输出完整审查文本）
 - [x] Agent 超时从 300 秒增加到 900 秒
@@ -230,6 +236,10 @@ refresh_rate_ms = 500
 - [x] Orchestrator exchange 分类重构（`ExchangeKind` 枚举 + `classify_exchange()` 函数）
 - [x] 共识检测词边界检查（避免 "whatnot agree" 误匹配）
 - [x] 新增单元测试：orchestrator（3 个）、consensus（2 个新增）、agent（1 个）
+- [x] **重新开始功能**：会话结束后按 `r` 键重启回到启动屏（`DashboardExit::Restart` + main.rs loop）
+- [x] **手动 apply 模式**：启动屏"自动修改"开关设为"否"，达成共识后暂停等待 Enter 确认（`Phase::WaitingForApply` + `mpsc` channel）
+- [x] `MdtalkConfig` 及子结构体派生 `Clone`，支持重启循环中重复使用配置
+- [x] Agent 错误信息改进：分离非零退出码和空输出的错误提示，包含 stdout/stderr 前 500 字符
 
 ### 待改进（功能增强）
 - [ ] `dashboard.refresh_rate_ms` 配置项未生效（tick_rate 硬编码 100ms）
@@ -237,3 +247,17 @@ refresh_rate_ms = 500
 - [ ] 无 session 管理（每次覆盖 conversation.md）
 - [ ] Agent args 硬编码（无模板系统）
 - [ ] Codex apply 阶段应使用不同于审查阶段的 sandbox 参数（当前统一使用 `--full-auto`）
+
+### 自检发现的问题（待修复）
+以下问题由 MDTalk 自检（3 轮 claude+claude 审查）发现，全部经源代码验证确认：
+- [ ] **[高]** apply 阶段 ~50 行重复代码（手动模式和自动模式）→ 提取 `run_apply_phase()` 函数
+- [ ] **[高]** 共识检测缺少转折词处理（"I agree, however..." 会被误判为共识）→ 增加 but/however/但是 检测
+- [ ] **[中]** 超时默认值不一致（代码 `default_timeout()` 返回 600，文档和 toml 写 900）
+- [ ] **[中]** `last_a_response`/`last_b_response` 应用 `Option<String>` 替代空字符串 + `#[allow(unused_assignments)]`
+- [ ] **[中]** Windows/非 Windows 分支代码重复（agent.rs）→ 先构建 Command 再统一配置
+- [ ] **[中]** 日志初始化失败时 Dashboard 模式完全没有 tracing subscriber
+- [ ] **[中]** magic number 4/5 硬编码（dashboard field count）→ 定义 `const FIELD_COUNT`
+- [ ] **[低]** restart 循环中 cfg 不保留上一次用户选择
+- [ ] **[低]** Markdown 着色 `starts_with('#')` 过于宽泛（匹配代码中的 #include 等）
+- [ ] **[低]** `has_affirmative_keyword` 和 `has_negated_keyword` 逻辑高度重复 → 提取公共函数
+- [ ] **[低]** 无集成测试（可用 `echo "I agree"` 作 mock agent）
