@@ -147,9 +147,7 @@ impl MdtalkConfig {
         };
 
         Self {
-            project: ProjectConfig {
-                path: project_path,
-            },
+            project: ProjectConfig { path: project_path },
             agent_a,
             agent_b,
             review: ReviewConfig {

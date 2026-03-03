@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::app::DashboardApp;
 use crate::orchestrator::Phase;
@@ -19,7 +19,7 @@ pub fn draw(f: &mut Frame, app: &DashboardApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),  // Status bar
+            Constraint::Length(4), // Status bar
             Constraint::Min(10),   // Content area
             Constraint::Length(6), // Log area
         ])
@@ -37,19 +37,19 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title
+            Constraint::Length(3), // Title
             Constraint::Min(8),    // Config info
             Constraint::Length(3), // Action hint
         ])
         .split(area);
 
     // Title
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            " MDTalk - 多智能体代码审查",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-    ]))
+    let title = Paragraph::new(Line::from(vec![Span::styled(
+        " MDTalk - 多智能体代码审查",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
@@ -60,26 +60,34 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
             Span::styled("  Agent A:  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 &state.agent_a_name,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
             Span::styled("  Agent B:  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 &state.agent_b_name,
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
             Span::styled("  最大轮次: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", state.max_rounds),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("  (每轮最多 ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", state.max_exchanges),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" 次讨论)", Style::default().fg(Color::Gray)),
         ]),
@@ -93,7 +101,12 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     // Action hint
     let hint = Paragraph::new(Line::from(vec![
         Span::styled("  按 ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" 开始审查  │  按 ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::styled(" 退出", Style::default().fg(Color::DarkGray)),
@@ -107,7 +120,12 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
         .session_start
         .map(|s| {
             let d = s.elapsed();
-            format!("{:02}:{:02}:{:02}", d.as_secs() / 3600, (d.as_secs() % 3600) / 60, d.as_secs() % 60)
+            format!(
+                "{:02}:{:02}:{:02}",
+                d.as_secs() / 3600,
+                (d.as_secs() % 3600) / 60,
+                d.as_secs() % 60
+            )
         })
         .unwrap_or_else(|| "--:--:--".to_string());
 
@@ -134,19 +152,25 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
             Span::styled(" 状态: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 phase_text,
-                Style::default().fg(phase_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(phase_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
             Span::styled("轮次: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}/{}", state.current_round, state.max_rounds),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
             Span::styled("讨论: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}/{}", state.current_exchange, state.max_exchanges),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
@@ -164,7 +188,11 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" MDTalk 仪表盘 ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
 
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
@@ -194,12 +222,16 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
             } else if line.starts_with("###") {
                 Line::from(Span::styled(
                     line.to_string(),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else if line.starts_with('#') {
                 Line::from(Span::styled(
                     line.to_string(),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(line.to_string())
@@ -207,9 +239,7 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         })
         .collect();
 
-    let conv_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" 对话预览 ");
+    let conv_block = Block::default().borders(Borders::ALL).title(" 对话预览 ");
     let conv_paragraph = Paragraph::new(conv_lines)
         .block(conv_block)
         .wrap(Wrap { trim: false });
@@ -231,26 +261,22 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let mut status_lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled(" Agent A: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                &state.agent_a_name,
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled(&state.agent_a_name, Style::default().fg(Color::Cyan)),
             Span::raw(" "),
             agent_a_status,
         ]),
         Line::from(vec![
             Span::styled(" Agent B: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                &state.agent_b_name,
-                Style::default().fg(Color::Magenta),
-            ),
+            Span::styled(&state.agent_b_name, Style::default().fg(Color::Magenta)),
             Span::raw(" "),
             agent_b_status,
         ]),
         Line::from(""),
         Line::from(Span::styled(
             " 轮次耗时:",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
         )),
     ];
 
@@ -267,9 +293,7 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         )));
     }
 
-    let status_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Agent 状态 ");
+    let status_block = Block::default().borders(Borders::ALL).title(" Agent 状态 ");
     let status_paragraph = Paragraph::new(status_lines).block(status_block);
     f.render_widget(status_paragraph, chunks[1]);
 }
@@ -284,9 +308,7 @@ fn draw_logs(f: &mut Frame, app: &DashboardApp, area: Rect) {
         .map(|log| Line::from(format!(" {log}")))
         .collect();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" 日志 ");
+    let block = Block::default().borders(Borders::ALL).title(" 日志 ");
     let paragraph = Paragraph::new(log_lines).block(block);
     f.render_widget(paragraph, area);
 }

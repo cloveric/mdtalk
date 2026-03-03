@@ -13,7 +13,10 @@ use tokio::sync::{oneshot, watch};
 use tracing::info;
 
 #[derive(Parser, Debug)]
-#[command(name = "mdtalk", about = "Multi-agent code review via Markdown conversation")]
+#[command(
+    name = "mdtalk",
+    about = "Multi-agent code review via Markdown conversation"
+)]
 struct Cli {
     /// Path to the project to review
     #[arg(short, long)]
@@ -120,9 +123,8 @@ async fn main() -> Result<()> {
             orchestrator::run(cfg, state_tx, no_apply, Some(start_rx)).await
         });
 
-        let dashboard_handle = tokio::task::spawn_blocking(move || {
-            dashboard::run(state_rx, start_tx)
-        });
+        let dashboard_handle =
+            tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx));
 
         // Wait for dashboard to finish (user presses q or orchestrator sets finished).
         // Then abort orchestrator if it's still running.

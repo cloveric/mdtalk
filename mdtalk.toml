@@ -2,17 +2,18 @@
 path = "."  # Path to the project to review
 
 [agent_a]
-name = "claude-code"
+name = "claude"
 command = "claude"
-timeout_secs = 300
+timeout_secs = 900
 
 [agent_b]
 name = "codex"
 command = "codex"
-timeout_secs = 300
+timeout_secs = 900
 
 [review]
-max_rounds = 5
+max_rounds = 1
+max_exchanges = 1
 consensus_keywords = ["agree", "consensus", "达成一致", "同意", "LGTM", "looks good", "no further"]
 output_file = "conversation.md"
 

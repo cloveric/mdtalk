@@ -172,7 +172,7 @@ wait() 后读取 stdout/stderr 可能因管道缓冲区满而死锁。
 确实值得关注。另外补充一点...
 
 ---"
-            .to_string(),
+        .to_string(),
         finished: false,
     };
 

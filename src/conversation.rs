@@ -22,10 +22,7 @@ impl Conversation {
     /// Create the conversation file with the initial header.
     pub fn create(&self) -> Result<()> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-        let header = format!(
-            "# 代码审查: {}\n## 审查会话 - {now}\n\n",
-            self.project_name
-        );
+        let header = format!("# 代码审查: {}\n## 审查会话 - {now}\n\n", self.project_name);
         std::fs::write(&self.path, &header)
             .with_context(|| format!("Failed to create conversation file {:?}", self.path))?;
         Ok(())

@@ -38,11 +38,27 @@ const NEGATION_PREFIXES: &[&str] = &[
 fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
     let kw_lower = keyword.to_lowercase();
     let text_lower = text.to_lowercase();
+    let requires_word_boundary = kw_lower.chars().any(|ch| ch.is_ascii_alphabetic())
+        && kw_lower
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch.is_ascii_whitespace());
 
     // Find all occurrences of the keyword
     let mut search_from = 0;
     while let Some(pos) = text_lower[search_from..].find(&kw_lower) {
         let abs_pos = search_from + pos;
+        let abs_end = abs_pos + kw_lower.len();
+
+        if requires_word_boundary {
+            let before = text_lower[..abs_pos].chars().next_back();
+            let after = text_lower[abs_end..].chars().next();
+            let valid_boundary = !before.is_some_and(|ch| ch.is_ascii_alphabetic())
+                && !after.is_some_and(|ch| ch.is_ascii_alphabetic());
+            if !valid_boundary {
+                search_from = abs_end;
+                continue;
+            }
+        }
 
         // Check the ~20 chars before this occurrence for negation.
         // Find a valid UTF-8 char boundary to avoid panic on multibyte text.
@@ -60,7 +76,7 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
             return true;
         }
 
-        search_from = abs_pos + kw_lower.len();
+        search_from = abs_end;
     }
 
     false
@@ -137,10 +153,16 @@ mod tests {
     #[test]
     fn chinese_negation() {
         let kws = vec!["同意".into()];
+        let r = check_consensus("我不同意这个方案。", "我同意所有改进建议。", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn english_word_boundary_is_respected() {
         let r = check_consensus(
-            "我不同意这个方案。",
-            "我同意所有改进建议。",
-            &kws,
+            "There is still disagreement on this part.",
+            "I agree with the plan.",
+            &kws(),
         );
         assert!(!r.reached);
     }

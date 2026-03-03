@@ -110,10 +110,12 @@ impl AgentRunner {
         match wait_result {
             Ok(Ok(status)) => {
                 // Process exited, now collect stdout/stderr (should complete quickly)
-                let stdout_bytes = stdout_task.await
+                let stdout_bytes = stdout_task
+                    .await
                     .map_err(|e| anyhow::anyhow!("stdout task join error: {e}"))?
                     .map_err(|e| anyhow::anyhow!("stdout read error: {e}"))?;
-                let stderr_bytes = stderr_task.await
+                let stderr_bytes = stderr_task
+                    .await
                     .map_err(|e| anyhow::anyhow!("stderr task join error: {e}"))?
                     .map_err(|e| anyhow::anyhow!("stderr read error: {e}"))?;
 
@@ -183,5 +185,30 @@ impl AgentRunner {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentRunner;
+    use std::time::Duration;
+
+    fn runner(command: &str) -> AgentRunner {
+        AgentRunner {
+            name: command.to_string(),
+            command: command.to_string(),
+            timeout: Duration::from_secs(60),
+        }
+    }
+
+    #[test]
+    fn codex_uses_full_auto_mode() {
+        let args = runner("codex").build_args("hello");
+        assert!(args.iter().any(|arg| arg == "--full-auto"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
     }
 }
