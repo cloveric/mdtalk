@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
                 orchestrator::run(cfg_clone, state_tx, no_apply, apply_level, Some(start_rx), Some(cmd_rx)).await
             });
 
+            let state_rx_main = state_rx.clone();
             let dashboard_handle =
                 tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx, cmd_tx));
 
@@ -173,6 +174,19 @@ async fn main() -> Result<()> {
                         Err(e) => eprintln!("Orchestrator panic: {e}"),
                         _ => {}
                     }
+                }
+            }
+
+            // Print merge instructions if branch was kept (not merged)
+            {
+                let final_state = state_rx_main.borrow();
+                if let (Some(rb), Some(ob)) = (&final_state.review_branch, &final_state.original_branch) {
+                    eprintln!();
+                    eprintln!("─── Branch Mode ───");
+                    eprintln!("Changes on branch: {rb}");
+                    eprintln!("To review:  git diff {ob}..{rb}");
+                    eprintln!("To merge:   git checkout {ob} && git merge {rb}");
+                    eprintln!();
                 }
             }
 

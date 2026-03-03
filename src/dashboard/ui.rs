@@ -169,6 +169,7 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
         Phase::CheckConsensus => Color::Yellow,
         Phase::WaitingForApply => Color::Yellow,
         Phase::ApplyChanges => Color::Green,
+        Phase::WaitingForMerge => Color::Yellow,
         Phase::Done => Color::Green,
     };
 
@@ -180,6 +181,7 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Phase::CheckConsensus => "Checking consensus".to_string(),
             Phase::WaitingForApply => "Waiting for apply".to_string(),
             Phase::ApplyChanges => format!("Agent B ({}) applying", state.agent_b_name),
+            Phase::WaitingForMerge => "Waiting for merge".to_string(),
             Phase::Done => "Done".to_string(),
         }
     } else {
@@ -190,6 +192,7 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Phase::CheckConsensus => "检测共识".to_string(),
             Phase::WaitingForApply => "等待确认修改".to_string(),
             Phase::ApplyChanges => format!("Agent B ({}) 修改代码中", state.agent_b_name),
+            Phase::WaitingForMerge => "等待合并".to_string(),
             Phase::Done => "已完成".to_string(),
         }
     };
@@ -244,6 +247,15 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 ));
                 hint_spans.push(Span::styled(if en { " Apply" } else { " 执行修改" }, Style::default().fg(Color::DarkGray)));
+            } else if state.phase == Phase::WaitingForMerge {
+                hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                hint_spans.push(Span::styled(if en { " Merge" } else { " 合并分支" }, Style::default().fg(Color::DarkGray)));
             }
             Line::from(hint_spans)
         },
@@ -336,6 +348,10 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         ),
         Phase::ApplyChanges => Span::styled(
             if en { "● Applying" } else { "● 修改代码中" },
+            Style::default().fg(Color::Yellow),
+        ),
+        Phase::WaitingForMerge => Span::styled(
+            if en { "⏸ Merge?" } else { "⏸ 等待合并" },
             Style::default().fg(Color::Yellow),
         ),
         Phase::Done => Span::styled(

@@ -188,6 +188,8 @@ wait() 后读取 stdout/stderr 可能因管道缓冲区满而死锁。
 ---"
         .to_string(),
         finished: false,
+        review_branch: None,
+        original_branch: None,
     };
 
     let (start_tx, _start_rx) = oneshot::channel();

@@ -47,6 +47,61 @@ async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Resu
     Ok(())
 }
 
+/// Stage all changes and commit. Silently succeeds if nothing to commit.
+async fn git_commit_all(project_path: &Path, message: &str) -> Result<()> {
+    TokioCommand::new("git")
+        .args(["add", "-A"])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await?;
+    // Commit — may fail if nothing to commit, that's fine
+    let _ = TokioCommand::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await;
+    Ok(())
+}
+
+/// Checkout target branch and merge the given branch into it.
+async fn git_checkout_and_merge(
+    project_path: &Path,
+    target_branch: &str,
+    merge_branch: &str,
+) -> Result<()> {
+    let output = TokioCommand::new("git")
+        .args(["checkout", target_branch])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git checkout {target_branch} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = TokioCommand::new("git")
+        .args(["merge", merge_branch])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git merge {merge_branch} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
 /// Run an agent while sending heartbeat logs to the dashboard every 30 seconds.
 async fn run_agent_with_heartbeat(
     agent: &AgentRunner,
@@ -118,6 +173,8 @@ pub struct OrchestratorState {
     pub conversation_preview: String,
     pub finished: bool,
     pub language: String,
+    pub review_branch: Option<String>,
+    pub original_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +185,7 @@ pub enum Phase {
     CheckConsensus,
     WaitingForApply,
     ApplyChanges,
+    WaitingForMerge,
     Done,
 }
 
@@ -140,6 +198,7 @@ impl std::fmt::Display for Phase {
             Phase::CheckConsensus => write!(f, "检测共识"),
             Phase::WaitingForApply => write!(f, "等待确认修改"),
             Phase::ApplyChanges => write!(f, "修改代码中"),
+            Phase::WaitingForMerge => write!(f, "等待合并"),
             Phase::Done => write!(f, "已完成"),
         }
     }
@@ -148,6 +207,7 @@ impl std::fmt::Display for Phase {
 /// Commands sent from the dashboard to the orchestrator.
 pub enum OrchestratorCommand {
     ConfirmApply,
+    ConfirmMerge,
     Shutdown,
 }
 
@@ -166,8 +226,8 @@ fn consume_shutdown_command(
                     let _ = state_tx.send(state.clone());
                     return true;
                 }
-                Ok(OrchestratorCommand::ConfirmApply) => {
-                    // Ignore stale confirm commands outside the apply-confirm phase.
+                Ok(OrchestratorCommand::ConfirmApply) | Ok(OrchestratorCommand::ConfirmMerge) => {
+                    // Ignore stale confirm commands outside the relevant phase.
                 }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
@@ -193,6 +253,8 @@ impl OrchestratorState {
             conversation_preview: String::new(),
             finished: false,
             language: "zh".to_string(),
+            review_branch: None,
+            original_branch: None,
         }
     }
 
@@ -539,6 +601,7 @@ pub async fn run(
                                 shutdown_requested = true;
                                 break false;
                             }
+                            Some(_) => {} // ignore other commands
                             None => break true,
                         }
                     }
@@ -712,24 +775,76 @@ pub async fn run(
         }
     }
 
-    // Branch mode: log merge instructions
+    // Branch mode: commit changes and wait for merge decision
     if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
-        state.log(if state.is_en() { "─── Branch Mode ───" } else { "─── 分支模式 ───" });
-        state.log(&if state.is_en() {
-            format!("Changes on branch: {rb}")
+        // Auto-commit all changes on the review branch
+        if let Err(e) = git_commit_all(&project_path, &format!("mdtalk: review changes on {rb}")).await {
+            state.log(&if state.is_en() {
+                format!("Failed to commit changes: {e}")
+            } else {
+                format!("提交更改失败: {e}")
+            });
         } else {
-            format!("修改已保存在分支: {rb}")
-        });
-        state.log(&if state.is_en() {
-            format!("To review: git diff {ob}..{rb}")
+            state.log(&if state.is_en() {
+                format!("Changes committed on branch {rb}")
+            } else {
+                format!("更改已提交到分支 {rb}")
+            });
+        }
+
+        // Enter WaitingForMerge phase
+        state.phase = Phase::WaitingForMerge;
+        state.review_branch = Some(rb.clone());
+        state.original_branch = Some(ob.clone());
+        state.log(if state.is_en() {
+            "Press Enter to merge, or q to keep branch and exit"
         } else {
-            format!("查看差异: git diff {ob}..{rb}")
+            "按 Enter 合并分支，或按 q 保留分支并退出"
         });
-        state.log(&if state.is_en() {
-            format!("To merge:  git checkout {ob} && git merge {rb}")
-        } else {
-            format!("合并分支: git checkout {ob} && git merge {rb}")
-        });
+        state.update_preview(&conversation);
+        let _ = state_tx.send(state.clone());
+
+        // Wait for ConfirmMerge or Shutdown
+        let mut do_merge = false;
+        if let Some(ref mut rx) = cmd_rx {
+            loop {
+                match rx.recv().await {
+                    Some(OrchestratorCommand::ConfirmMerge) => {
+                        do_merge = true;
+                        break;
+                    }
+                    Some(OrchestratorCommand::Shutdown) => break,
+                    Some(_) => {} // ignore stale commands
+                    None => break,
+                }
+            }
+        }
+
+        if do_merge {
+            state.log(if state.is_en() { "Merging..." } else { "正在合并..." });
+            let _ = state_tx.send(state.clone());
+            match git_checkout_and_merge(&project_path, ob, rb).await {
+                Ok(()) => {
+                    state.log(&if state.is_en() {
+                        format!("Merged {rb} into {ob}")
+                    } else {
+                        format!("已将 {rb} 合并到 {ob}")
+                    });
+                    // Clear branch info since merge is done
+                    state.review_branch = None;
+                    state.original_branch = None;
+                }
+                Err(e) => {
+                    state.log(&if state.is_en() {
+                        format!("Merge failed: {e}")
+                    } else {
+                        format!("合并失败: {e}")
+                    });
+                    // Keep branch info so user can merge manually
+                }
+            }
+        }
+        // If not merging, review_branch/original_branch stay set for main.rs to print instructions
     }
 
     state.phase = Phase::Done;

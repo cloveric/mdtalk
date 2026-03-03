@@ -37,6 +37,7 @@ fn handle_key(app: &mut DashboardApp, key: KeyEvent) {
         KeyCode::Char('r') if app.state.finished => app.request_restart(),
         KeyCode::Enter if app.waiting_for_start => app.confirm_start(),
         KeyCode::Enter if app.state.phase == Phase::WaitingForApply => app.confirm_apply(),
+        KeyCode::Enter if app.state.phase == Phase::WaitingForMerge => app.confirm_merge(),
         KeyCode::Up | KeyCode::Char('k') if app.waiting_for_start => app.select_prev(),
         KeyCode::Down | KeyCode::Char('j') if app.waiting_for_start => app.select_next(),
         KeyCode::Left | KeyCode::Char('h') if app.waiting_for_start => app.adjust_left(),

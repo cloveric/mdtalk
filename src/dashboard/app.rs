@@ -141,6 +141,11 @@ impl DashboardApp {
         let _ = self.cmd_tx.blocking_send(OrchestratorCommand::ConfirmApply);
     }
 
+    /// Send ConfirmMerge command to orchestrator (blocking).
+    pub fn confirm_merge(&self) {
+        let _ = self.cmd_tx.blocking_send(OrchestratorCommand::ConfirmMerge);
+    }
+
     /// Request a restart (back to start screen after session finishes).
     pub fn request_restart(&mut self) {
         self.restart_requested = true;
