@@ -25,10 +25,9 @@
 
 <br>
 
-<img src="assets/dashboard.png" alt="MDTalk Dashboard" width="720">
+<img src="assets/banner.png" alt="MDTalk — Two AIs debate your code" width="720">
 
-<p><sub>Claude (Agent A) × Codex (Agent B) — real-time code review in your terminal</sub></p>
-
+<br>
 <br>
 
 </div>
