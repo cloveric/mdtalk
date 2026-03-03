@@ -59,8 +59,9 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         "  Auto Apply:  ",
         "  Apply Level: ",
         "  Language:    ",
+        "  Branch Mode: ",
     ];
-    let values: [String; 7] = [
+    let values: [String; 8] = [
         app.agent_presets[app.agent_a_idx].clone(),
         app.agent_presets[app.agent_b_idx].clone(),
         format!("{}", app.edit_rounds),
@@ -72,11 +73,12 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
             _ => "High".to_string(),
         },
         if app.language == "en" { "English".to_string() } else { "中文".to_string() },
+        if app.branch_mode { "Yes".to_string() } else { "No".to_string() },
     ];
 
     let normal_style = Style::default().fg(Color::Gray);
     let selected_bg = Style::default().bg(Color::DarkGray).fg(Color::White);
-    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White, Color::Yellow, Color::Green, Color::Cyan];
+    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White, Color::Yellow, Color::Green, Color::Cyan, Color::Yellow];
 
     let mut info_lines = vec![Line::from("")];
     for (i, (label, value)) in labels.iter().zip(values.iter()).enumerate() {

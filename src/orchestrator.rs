@@ -5,10 +5,47 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
+use tokio::process::Command as TokioCommand;
+
 use crate::agent::{AgentOutput, AgentRunner};
 use crate::config::MdtalkConfig;
 use crate::consensus;
 use crate::conversation::Conversation;
+
+/// Get current git branch name. Returns None if not a git repo.
+async fn git_current_branch(project_path: &Path) -> Option<String> {
+    let output = TokioCommand::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// Create and switch to a new git branch.
+async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Result<()> {
+    let output = TokioCommand::new("git")
+        .args(["checkout", "-b", branch_name])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git checkout -b {branch_name} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
 
 /// Run an agent while sending heartbeat logs to the dashboard every 30 seconds.
 async fn run_agent_with_heartbeat(
@@ -190,6 +227,9 @@ pub async fn run(
     // Whether the user wants manual apply confirmation
     let mut auto_apply = true;
     let mut apply_level: u32 = cli_apply_level;
+    let mut branch_mode = false;
+    let mut original_branch: Option<String> = None;
+    let mut review_branch: Option<String> = None;
 
     // Wait for dashboard confirmation if a start signal receiver is provided
     if let Some(rx) = start_rx {
@@ -199,6 +239,7 @@ pub async fn run(
                 info!("收到开始信号");
                 auto_apply = sc.auto_apply;
                 apply_level = sc.apply_level;
+                branch_mode = sc.branch_mode;
                 let lang = sc.language.clone();
                 config.apply_start_config(sc);
                 // Re-initialize state from updated config
@@ -550,6 +591,42 @@ pub async fn run(
                 return Ok(());
             }
 
+            // Branch mode: create review branch before the first apply
+            if branch_mode && review_branch.is_none() {
+                match git_current_branch(&project_path).await {
+                    Some(branch) => {
+                        original_branch = Some(branch);
+                        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                        let new_branch = format!("mdtalk/review-{ts}");
+                        match git_checkout_new_branch(&project_path, &new_branch).await {
+                            Ok(()) => {
+                                state.log(&if state.is_en() {
+                                    format!("Branch mode: created branch {new_branch}")
+                                } else {
+                                    format!("分支模式: 已创建分支 {new_branch}")
+                                });
+                                review_branch = Some(new_branch);
+                            }
+                            Err(e) => {
+                                state.log(&if state.is_en() {
+                                    format!("Branch mode: failed to create branch: {e}")
+                                } else {
+                                    format!("分支模式: 创建分支失败: {e}")
+                                });
+                            }
+                        }
+                    }
+                    None => {
+                        state.log(if state.is_en() {
+                            "Branch mode: not a git repo, skipping"
+                        } else {
+                            "分支模式: 非 git 仓库，已跳过"
+                        });
+                    }
+                }
+                let _ = state_tx.send(state.clone());
+            }
+
             state.phase = Phase::ApplyChanges;
             state.log(&if state.is_en() {
                 format!("Round {round}: Agent B applying changes...")
@@ -633,6 +710,26 @@ pub async fn run(
                     });
             let _ = state_tx.send(state.clone());
         }
+    }
+
+    // Branch mode: log merge instructions
+    if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
+        state.log(if state.is_en() { "─── Branch Mode ───" } else { "─── 分支模式 ───" });
+        state.log(&if state.is_en() {
+            format!("Changes on branch: {rb}")
+        } else {
+            format!("修改已保存在分支: {rb}")
+        });
+        state.log(&if state.is_en() {
+            format!("To review: git diff {ob}..{rb}")
+        } else {
+            format!("查看差异: git diff {ob}..{rb}")
+        });
+        state.log(&if state.is_en() {
+            format!("To merge:  git checkout {ob} && git merge {rb}")
+        } else {
+            format!("合并分支: git checkout {ob} && git merge {rb}")
+        });
     }
 
     state.phase = Phase::Done;

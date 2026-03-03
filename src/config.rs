@@ -124,6 +124,7 @@ pub struct StartConfig {
     pub auto_apply: bool,
     pub apply_level: u32,
     pub language: String,
+    pub branch_mode: bool,
 }
 
 impl MdtalkConfig {
