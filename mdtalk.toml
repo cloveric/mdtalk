@@ -1,0 +1,20 @@
+[project]
+path = "."  # Path to the project to review
+
+[agent_a]
+name = "claude-code"
+command = "claude"
+timeout_secs = 300
+
+[agent_b]
+name = "codex"
+command = "codex"
+timeout_secs = 300
+
+[review]
+max_rounds = 5
+consensus_keywords = ["agree", "consensus", "达成一致", "同意", "LGTM", "looks good", "no further"]
+output_file = "conversation.md"
+
+[dashboard]
+refresh_rate_ms = 500
