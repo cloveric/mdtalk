@@ -111,7 +111,29 @@ impl Default for DashboardConfig {
     }
 }
 
+/// Agent command presets available in the start screen.
+pub const AGENT_PRESETS: &[&str] = &["claude", "codex", "gemini"];
+
+/// Settings chosen by the user on the interactive start screen.
+#[derive(Debug, Clone)]
+pub struct StartConfig {
+    pub agent_a_command: String,
+    pub agent_b_command: String,
+    pub max_rounds: u32,
+    pub max_exchanges: u32,
+}
+
 impl MdtalkConfig {
+    /// Apply user-chosen start-screen settings, overwriting the relevant fields.
+    pub fn apply_start_config(&mut self, sc: StartConfig) {
+        self.agent_a.name = sc.agent_a_command.clone();
+        self.agent_a.command = sc.agent_a_command;
+        self.agent_b.name = sc.agent_b_command.clone();
+        self.agent_b.command = sc.agent_b_command;
+        self.review.max_rounds = sc.max_rounds;
+        self.review.max_exchanges = sc.max_exchanges;
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let content =
             std::fs::read_to_string(path).with_context(|| format!("Failed to read {path:?}"))?;

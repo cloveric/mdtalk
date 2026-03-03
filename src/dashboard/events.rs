@@ -34,6 +34,10 @@ fn handle_key(app: &mut DashboardApp, key: KeyEvent) {
         KeyCode::Char('q') | KeyCode::Esc => app.quit(),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => app.quit(),
         KeyCode::Enter if app.waiting_for_start => app.confirm_start(),
+        KeyCode::Up | KeyCode::Char('k') if app.waiting_for_start => app.select_prev(),
+        KeyCode::Down | KeyCode::Char('j') if app.waiting_for_start => app.select_next(),
+        KeyCode::Left | KeyCode::Char('h') if app.waiting_for_start => app.adjust_left(),
+        KeyCode::Right | KeyCode::Char('l') if app.waiting_for_start => app.adjust_right(),
         KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
         KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
         _ => {}

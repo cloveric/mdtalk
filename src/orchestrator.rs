@@ -132,10 +132,10 @@ impl OrchestratorState {
 }
 
 pub async fn run(
-    config: MdtalkConfig,
+    mut config: MdtalkConfig,
     state_tx: watch::Sender<OrchestratorState>,
     no_apply: bool,
-    start_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    start_rx: Option<tokio::sync::oneshot::Receiver<crate::config::StartConfig>>,
 ) -> Result<()> {
     let mut state = OrchestratorState::new(&config);
     info!("编排器已启动");
@@ -144,7 +144,13 @@ pub async fn run(
     if let Some(rx) = start_rx {
         info!("等待用户确认开始...");
         match rx.await {
-            Ok(()) => info!("收到开始信号"),
+            Ok(sc) => {
+                info!("收到开始信号");
+                config.apply_start_config(sc);
+                // Re-initialize state from updated config
+                state = OrchestratorState::new(&config);
+                let _ = state_tx.send(state.clone());
+            }
             Err(_) => {
                 info!("开始信号发送端已关闭，退出");
                 return Ok(());

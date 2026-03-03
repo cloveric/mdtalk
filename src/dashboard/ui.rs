@@ -31,14 +31,13 @@ pub fn draw(f: &mut Frame, app: &DashboardApp) {
 }
 
 fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
-    let state = &app.state;
     let area = f.area();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title
-            Constraint::Min(8),    // Config info
+            Constraint::Min(8),    // Config form
             Constraint::Length(3), // Action hint
         ])
         .split(area);
@@ -53,46 +52,58 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Config summary
-    let info_lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Agent A:  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                &state.agent_a_name,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Agent B:  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                &state.agent_b_name,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  最大轮次: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("{}", state.max_rounds),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  (每轮最多 ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("{}", state.max_exchanges),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" 次讨论)", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(""),
+    // Interactive config form — 4 fields
+    let labels = ["  Agent A:    ", "  Agent B:    ", "  轮次:       ", "  讨论次数:   "];
+    let values: [String; 4] = [
+        app.agent_presets[app.agent_a_idx].clone(),
+        app.agent_presets[app.agent_b_idx].clone(),
+        format!("{}", app.edit_rounds),
+        format!("{}", app.edit_exchanges),
     ];
+
+    let normal_style = Style::default().fg(Color::Gray);
+    let selected_bg = Style::default().bg(Color::DarkGray).fg(Color::White);
+    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White];
+
+    let mut info_lines = vec![Line::from("")];
+    for (i, (label, value)) in labels.iter().zip(values.iter()).enumerate() {
+        let is_selected = i == app.selected_field;
+        let val_color = value_colors[i];
+
+        if is_selected {
+            info_lines.push(Line::from(vec![
+                Span::styled(*label, selected_bg),
+                Span::styled(
+                    "◄ ",
+                    selected_bg.add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    value,
+                    selected_bg
+                        .fg(val_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ►",
+                    selected_bg.add_modifier(Modifier::BOLD),
+                ),
+                // pad the rest of the line with the selected background
+                Span::styled("  ", selected_bg),
+            ]));
+        } else {
+            info_lines.push(Line::from(vec![
+                Span::styled(*label, normal_style),
+                Span::styled("  ", normal_style),
+                Span::styled(
+                    value,
+                    Style::default()
+                        .fg(val_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+    }
+    info_lines.push(Line::from(""));
 
     let info = Paragraph::new(info_lines)
         .block(Block::default().borders(Borders::ALL).title(" 审查配置 "));
@@ -100,14 +111,18 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
 
     // Action hint
     let hint = Paragraph::new(Line::from(vec![
-        Span::styled("  按 ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+        Span::styled(" 选择  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("←→", Style::default().fg(Color::Yellow)),
+        Span::styled(" 调整  ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             "Enter",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" 开始审查  │  按 ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" 开始  ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::styled(" 退出", Style::default().fg(Color::DarkGray)),
     ]))

@@ -16,6 +16,7 @@ use ratatui::backend::{CrosstermBackend, TestBackend};
 use tokio::sync::{oneshot, watch};
 
 use self::app::DashboardApp;
+use crate::config::StartConfig;
 use crate::orchestrator::{OrchestratorState, Phase};
 
 /// Restore terminal to normal mode. Called on both normal exit and error.
@@ -34,7 +35,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
 /// event::poll() blocks the OS thread. It must run on spawn_blocking, not tokio::spawn.
 pub fn run(
     mut state_rx: watch::Receiver<OrchestratorState>,
-    start_tx: oneshot::Sender<()>,
+    start_tx: oneshot::Sender<StartConfig>,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -54,7 +55,7 @@ pub fn run(
 fn run_dashboard_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state_rx: &mut watch::Receiver<OrchestratorState>,
-    start_tx: oneshot::Sender<()>,
+    start_tx: oneshot::Sender<StartConfig>,
 ) -> Result<()> {
     // Drain any buffered key events from launching the command
     events::drain_buffered_events();

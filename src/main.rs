@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
         }
 
         let no_apply = cli.no_apply;
-        let (start_tx, start_rx) = oneshot::channel();
+        let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
 
         let orchestrator_handle = tokio::spawn(async move {
             orchestrator::run(cfg, state_tx, no_apply, Some(start_rx)).await
