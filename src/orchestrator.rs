@@ -404,6 +404,18 @@ pub async fn run(
                         "代码修改",
                         &output.content,
                     )?;
+                    match crate::conversation::append_changelog(
+                        &project_path,
+                        round,
+                        &output.content,
+                    ) {
+                        Ok(()) => {
+                            state.log("review_changelog.md 已更新");
+                        }
+                        Err(e) => {
+                            state.log(&format!("写入 review_changelog.md 失败: {e}"));
+                        }
+                    }
                     state.log(&format!(
                         "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
                         output.duration.as_secs_f64()

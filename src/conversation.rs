@@ -74,3 +74,28 @@ impl Conversation {
             .with_context(|| format!("Failed to read conversation file {:?}", self.path))
     }
 }
+
+/// Append an apply-phase entry to `review_changelog.md` in the project directory.
+/// Creates the file with a header on first write.
+pub fn append_changelog(project_dir: &Path, round: u32, content: &str) -> Result<()> {
+    let path = project_dir.join("review_changelog.md");
+    let needs_header = !path.exists();
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("Failed to open changelog {:?}", path))?;
+
+    if needs_header {
+        write!(file, "# MDTalk 代码修改记录\n\n")?;
+    }
+
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S");
+    write!(
+        file,
+        "## 第{round}轮 代码修改 - {now}\n\n{content}\n\n---\n\n"
+    )?;
+
+    Ok(())
+}
