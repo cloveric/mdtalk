@@ -127,11 +127,20 @@ impl AgentRunner {
                     warn!(agent = %self.name, stderr = %stderr, "Agent produced stderr output");
                 }
 
-                if status.code() != Some(0) && stdout.trim().is_empty() {
+                if !status.success() {
                     anyhow::bail!(
-                        "Agent '{}' exited with code {:?} and produced no output. stderr: {}",
+                        "Agent '{}' 以退出码 {:?} 异常退出。\nstderr: {}\nstdout (前500字符): {}",
                         self.name,
                         status.code(),
+                        stderr.chars().take(500).collect::<String>(),
+                        stdout.chars().take(500).collect::<String>()
+                    );
+                }
+
+                if stdout.trim().is_empty() {
+                    anyhow::bail!(
+                        "Agent '{}' 正常退出但未产生任何输出。stderr: {}",
+                        self.name,
                         stderr.chars().take(500).collect::<String>()
                     );
                 }

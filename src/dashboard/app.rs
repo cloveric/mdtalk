@@ -1,7 +1,7 @@
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::config::{AGENT_PRESETS, StartConfig};
-use crate::orchestrator::OrchestratorState;
+use crate::orchestrator::{OrchestratorCommand, OrchestratorState};
 
 pub struct DashboardApp {
     pub state: OrchestratorState,
@@ -9,7 +9,9 @@ pub struct DashboardApp {
     pub log_scroll_offset: u16,
     pub should_quit: bool,
     pub waiting_for_start: bool,
+    pub restart_requested: bool,
     start_tx: Option<oneshot::Sender<StartConfig>>,
+    cmd_tx: mpsc::Sender<OrchestratorCommand>,
 
     // Interactive start-screen fields
     pub selected_field: usize,
@@ -18,10 +20,15 @@ pub struct DashboardApp {
     pub agent_b_idx: usize,
     pub edit_rounds: u32,
     pub edit_exchanges: u32,
+    pub auto_apply: bool,
 }
 
 impl DashboardApp {
-    pub fn new(initial_state: OrchestratorState, start_tx: oneshot::Sender<StartConfig>) -> Self {
+    pub fn new(
+        initial_state: OrchestratorState,
+        start_tx: oneshot::Sender<StartConfig>,
+        cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    ) -> Self {
         let presets: Vec<String> = AGENT_PRESETS.iter().map(|s| s.to_string()).collect();
 
         let agent_a_idx = presets
@@ -42,13 +49,16 @@ impl DashboardApp {
             log_scroll_offset: 0,
             should_quit: false,
             waiting_for_start: true,
+            restart_requested: false,
             start_tx: Some(start_tx),
+            cmd_tx,
             selected_field: 0,
             agent_presets: presets,
             agent_a_idx,
             agent_b_idx,
             edit_rounds,
             edit_exchanges,
+            auto_apply: true,
         }
     }
 
@@ -57,13 +67,13 @@ impl DashboardApp {
         if self.selected_field > 0 {
             self.selected_field -= 1;
         } else {
-            self.selected_field = 3;
+            self.selected_field = 4;
         }
     }
 
     /// Move selection to next field.
     pub fn select_next(&mut self) {
-        if self.selected_field < 3 {
+        if self.selected_field < 4 {
             self.selected_field += 1;
         } else {
             self.selected_field = 0;
@@ -78,6 +88,7 @@ impl DashboardApp {
             1 => self.agent_b_idx = (self.agent_b_idx + n - 1) % n,
             2 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
             3 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
+            4 => self.auto_apply = !self.auto_apply,
             _ => {}
         }
     }
@@ -90,6 +101,7 @@ impl DashboardApp {
             1 => self.agent_b_idx = (self.agent_b_idx + 1) % n,
             2 => self.edit_rounds = (self.edit_rounds + 1).min(10),
             3 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
+            4 => self.auto_apply = !self.auto_apply,
             _ => {}
         }
     }
@@ -102,10 +114,22 @@ impl DashboardApp {
                 agent_b_command: self.agent_presets[self.agent_b_idx].clone(),
                 max_rounds: self.edit_rounds,
                 max_exchanges: self.edit_exchanges,
+                auto_apply: self.auto_apply,
             };
             let _ = tx.send(sc);
             self.waiting_for_start = false;
         }
+    }
+
+    /// Send ConfirmApply command to orchestrator (blocking).
+    pub fn confirm_apply(&self) {
+        let _ = self.cmd_tx.blocking_send(OrchestratorCommand::ConfirmApply);
+    }
+
+    /// Request a restart (back to start screen after session finishes).
+    pub fn request_restart(&mut self) {
+        self.restart_requested = true;
+        self.should_quit = true;
     }
 
     pub fn update_state(&mut self, new_state: OrchestratorState) {

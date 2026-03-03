@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MdtalkConfig {
     pub project: ProjectConfig,
     #[serde(default = "default_agent_a")]
@@ -17,12 +17,12 @@ pub struct MdtalkConfig {
     pub dashboard: DashboardConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProjectConfig {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AgentConfig {
     pub name: String,
     pub command: String,
@@ -30,7 +30,7 @@ pub struct AgentConfig {
     pub timeout_secs: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ReviewConfig {
     #[serde(default = "default_max_rounds")]
     pub max_rounds: u32,
@@ -42,7 +42,7 @@ pub struct ReviewConfig {
     pub output_file: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct DashboardConfig {
     #[serde(default = "default_refresh_rate")]
@@ -121,6 +121,7 @@ pub struct StartConfig {
     pub agent_b_command: String,
     pub max_rounds: u32,
     pub max_exchanges: u32,
+    pub auto_apply: bool,
 }
 
 impl MdtalkConfig {
@@ -139,7 +140,22 @@ impl MdtalkConfig {
             std::fs::read_to_string(path).with_context(|| format!("Failed to read {path:?}"))?;
         let config: MdtalkConfig =
             toml::from_str(&content).with_context(|| format!("Failed to parse {path:?}"))?;
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Validate configuration values.
+    fn validate(&self) -> Result<()> {
+        if self.review.max_rounds < 1 {
+            anyhow::bail!("max_rounds 必须 >= 1，当前值为 {}", self.review.max_rounds);
+        }
+        if self.review.max_exchanges < 1 {
+            anyhow::bail!(
+                "max_exchanges 必须 >= 1，当前值为 {}",
+                self.review.max_exchanges
+            );
+        }
+        Ok(())
     }
 
     /// Build a config from CLI arguments, falling back to defaults.

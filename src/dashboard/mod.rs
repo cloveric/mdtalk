@@ -13,11 +13,17 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::{CrosstermBackend, TestBackend};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use self::app::DashboardApp;
 use crate::config::StartConfig;
-use crate::orchestrator::{OrchestratorState, Phase};
+use crate::orchestrator::{OrchestratorCommand, OrchestratorState, Phase};
+
+/// What the dashboard returns when it exits.
+pub enum DashboardExit {
+    Quit,
+    Restart,
+}
 
 /// Restore terminal to normal mode. Called on both normal exit and error.
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
@@ -36,7 +42,8 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
 pub fn run(
     mut state_rx: watch::Receiver<OrchestratorState>,
     start_tx: oneshot::Sender<StartConfig>,
-) -> Result<()> {
+    cmd_tx: mpsc::Sender<OrchestratorCommand>,
+) -> Result<DashboardExit> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -44,7 +51,7 @@ pub fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_dashboard_loop(&mut terminal, &mut state_rx, start_tx);
+    let result = run_dashboard_loop(&mut terminal, &mut state_rx, start_tx, cmd_tx);
 
     // Always restore terminal, even on error
     restore_terminal(&mut terminal);
@@ -56,12 +63,13 @@ fn run_dashboard_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state_rx: &mut watch::Receiver<OrchestratorState>,
     start_tx: oneshot::Sender<StartConfig>,
-) -> Result<()> {
+    cmd_tx: mpsc::Sender<OrchestratorCommand>,
+) -> Result<DashboardExit> {
     // Drain any buffered key events from launching the command
     events::drain_buffered_events();
 
     let initial_state = state_rx.borrow().clone();
-    let mut app = DashboardApp::new(initial_state, start_tx);
+    let mut app = DashboardApp::new(initial_state, start_tx, cmd_tx);
 
     let tick_rate = Duration::from_millis(100);
 
@@ -106,7 +114,11 @@ fn run_dashboard_loop(
         }
     }
 
-    Ok(())
+    if app.restart_requested {
+        Ok(DashboardExit::Restart)
+    } else {
+        Ok(DashboardExit::Quit)
+    }
 }
 
 /// Render one frame with mock data to stdout (for `--demo` preview).
@@ -178,7 +190,8 @@ wait() 后读取 stdout/stderr 可能因管道缓冲区满而死锁。
     };
 
     let (start_tx, _start_rx) = oneshot::channel();
-    let mut app = DashboardApp::new(mock_state, start_tx);
+    let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+    let mut app = DashboardApp::new(mock_state, start_tx, cmd_tx);
     // Demo shows the running state, not the start screen
     app.waiting_for_start = false;
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -35,11 +35,11 @@ struct Cli {
     agent_b: Option<String>,
 
     /// Maximum number of review rounds (each round = consensus + code fix)
-    #[arg(short, long)]
+    #[arg(short, long, value_parser = clap::value_parser!(u32).range(1..))]
     max_rounds: Option<u32>,
 
     /// Maximum exchanges per round (A+B back-and-forth before giving up)
-    #[arg(short = 'e', long)]
+    #[arg(short = 'e', long, value_parser = clap::value_parser!(u32).range(1..))]
     max_exchanges: Option<u32>,
 
     /// Run without TUI dashboard (log to stdout)
@@ -87,17 +87,15 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Create the watch channel for dashboard updates
-    let (state_tx, state_rx) = watch::channel(orchestrator::OrchestratorState::new(&cfg));
-
     if cli.no_dashboard {
         // No-dashboard mode: set up tracing to stdout and just run the orchestrator
         tracing_subscriber::fmt()
             .with_env_filter("mdtalk=info")
             .init();
 
+        let (state_tx, _state_rx) = watch::channel(orchestrator::OrchestratorState::new(&cfg));
         info!("MDTalk 审查启动 (无仪表盘模式)");
-        orchestrator::run(cfg, state_tx, cli.no_apply, None).await?;
+        orchestrator::run(cfg, state_tx, cli.no_apply, None, None).await?;
     } else {
         // Dashboard mode: tracing goes to a log file
         match std::fs::File::create("mdtalk.log") {
@@ -117,32 +115,53 @@ async fn main() -> Result<()> {
         }
 
         let no_apply = cli.no_apply;
-        let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
 
-        let orchestrator_handle = tokio::spawn(async move {
-            orchestrator::run(cfg, state_tx, no_apply, Some(start_rx)).await
-        });
+        loop {
+            let cfg_clone = cfg.clone();
+            let (state_tx, state_rx) =
+                watch::channel(orchestrator::OrchestratorState::new(&cfg_clone));
+            let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
+            let (cmd_tx, cmd_rx) = mpsc::channel::<orchestrator::OrchestratorCommand>(1);
 
-        let dashboard_handle =
-            tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx));
+            let orchestrator_handle = tokio::spawn(async move {
+                orchestrator::run(cfg_clone, state_tx, no_apply, Some(start_rx), Some(cmd_rx))
+                    .await
+            });
 
-        // Wait for dashboard to finish (user presses q or orchestrator sets finished).
-        // Then abort orchestrator if it's still running.
-        let orch_abort = orchestrator_handle.abort_handle();
+            let dashboard_handle =
+                tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx, cmd_tx));
 
-        let dash_result = dashboard_handle.await;
-        if let Ok(Err(e)) = dash_result {
-            eprintln!("Dashboard error: {e}");
-        }
+            // Wait for dashboard to finish (user presses q or orchestrator sets finished).
+            // Then abort orchestrator if it's still running.
+            let orch_abort = orchestrator_handle.abort_handle();
 
-        // Dashboard exited — abort orchestrator if still running
-        orch_abort.abort();
-        // Wait for orchestrator to finish (may already be done or just aborted)
-        match orchestrator_handle.await {
-            Ok(Err(e)) => eprintln!("Orchestrator error: {e}"),
-            Err(e) if e.is_cancelled() => {} // expected if we aborted
-            Err(e) => eprintln!("Orchestrator panic: {e}"),
-            _ => {}
+            let dash_result = dashboard_handle.await;
+            let exit = match dash_result {
+                Ok(Ok(exit)) => exit,
+                Ok(Err(e)) => {
+                    eprintln!("Dashboard error: {e}");
+                    dashboard::DashboardExit::Quit
+                }
+                Err(e) => {
+                    eprintln!("Dashboard panic: {e}");
+                    dashboard::DashboardExit::Quit
+                }
+            };
+
+            // Dashboard exited — abort orchestrator if still running
+            orch_abort.abort();
+            // Wait for orchestrator to finish (may already be done or just aborted)
+            match orchestrator_handle.await {
+                Ok(Err(e)) => eprintln!("Orchestrator error: {e}"),
+                Err(e) if e.is_cancelled() => {} // expected if we aborted
+                Err(e) => eprintln!("Orchestrator panic: {e}"),
+                _ => {}
+            }
+
+            match exit {
+                dashboard::DashboardExit::Restart => continue,
+                dashboard::DashboardExit::Quit => break,
+            }
         }
     }
 

@@ -52,18 +52,25 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Interactive config form — 4 fields
-    let labels = ["  Agent A:    ", "  Agent B:    ", "  轮次:       ", "  讨论次数:   "];
-    let values: [String; 4] = [
+    // Interactive config form — 5 fields
+    let labels = [
+        "  Agent A:    ",
+        "  Agent B:    ",
+        "  轮次:       ",
+        "  讨论次数:   ",
+        "  自动修改:   ",
+    ];
+    let values: [String; 5] = [
         app.agent_presets[app.agent_a_idx].clone(),
         app.agent_presets[app.agent_b_idx].clone(),
         format!("{}", app.edit_rounds),
         format!("{}", app.edit_exchanges),
+        if app.auto_apply { "是".to_string() } else { "否".to_string() },
     ];
 
     let normal_style = Style::default().fg(Color::Gray);
     let selected_bg = Style::default().bg(Color::DarkGray).fg(Color::White);
-    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White];
+    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White, Color::Yellow];
 
     let mut info_lines = vec![Line::from("")];
     for (i, (label, value)) in labels.iter().zip(values.iter()).enumerate() {
@@ -149,6 +156,7 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
         Phase::AgentAReviewing => Color::Cyan,
         Phase::AgentBResponding => Color::Magenta,
         Phase::CheckConsensus => Color::Yellow,
+        Phase::WaitingForApply => Color::Yellow,
         Phase::ApplyChanges => Color::Green,
         Phase::Done => Color::Green,
     };
@@ -158,6 +166,7 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
         Phase::AgentAReviewing => format!("Agent A ({}) 审查中", state.agent_a_name),
         Phase::AgentBResponding => format!("Agent B ({}) 回应中", state.agent_b_name),
         Phase::CheckConsensus => "检测共识".to_string(),
+        Phase::WaitingForApply => "等待确认修改".to_string(),
         Phase::ApplyChanges => format!("Agent B ({}) 修改代码中", state.agent_b_name),
         Phase::Done => "已完成".to_string(),
     };
@@ -188,16 +197,33 @@ fn draw_status_bar(f: &mut Frame, state: &crate::orchestrator::OrchestratorState
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(vec![
-            Span::styled(" 已用时: ", Style::default().fg(Color::Gray)),
-            Span::styled(elapsed, Style::default().fg(Color::White)),
-            Span::raw("  │  "),
-            Span::styled("按 ", Style::default().fg(Color::DarkGray)),
-            Span::styled("q", Style::default().fg(Color::Yellow)),
-            Span::styled(" 退出, ", Style::default().fg(Color::DarkGray)),
-            Span::styled("↑↓", Style::default().fg(Color::Yellow)),
-            Span::styled(" 滚动", Style::default().fg(Color::DarkGray)),
-        ]),
+        {
+            let mut hint_spans = vec![
+                Span::styled(" 已用时: ", Style::default().fg(Color::Gray)),
+                Span::styled(elapsed, Style::default().fg(Color::White)),
+                Span::raw("  │  "),
+                Span::styled("按 ", Style::default().fg(Color::DarkGray)),
+                Span::styled("q", Style::default().fg(Color::Yellow)),
+                Span::styled(" 退出, ", Style::default().fg(Color::DarkGray)),
+                Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+                Span::styled(" 滚动", Style::default().fg(Color::DarkGray)),
+            ];
+            if state.finished {
+                hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled("r", Style::default().fg(Color::Yellow)));
+                hint_spans.push(Span::styled(" 重新开始", Style::default().fg(Color::DarkGray)));
+            } else if state.phase == Phase::WaitingForApply {
+                hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                hint_spans.push(Span::styled(" 执行修改", Style::default().fg(Color::DarkGray)));
+            }
+            Line::from(hint_spans)
+        },
     ];
 
     let block = Block::default()
@@ -268,6 +294,9 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
     };
     let agent_b_status = match state.phase {
         Phase::AgentBResponding => Span::styled("● 回应中", Style::default().fg(Color::Green)),
+        Phase::WaitingForApply => {
+            Span::styled("⏸ 等待确认", Style::default().fg(Color::Yellow))
+        }
         Phase::ApplyChanges => Span::styled("● 修改代码中", Style::default().fg(Color::Yellow)),
         Phase::Done => Span::styled("✓ 完成", Style::default().fg(Color::Green)),
         _ => Span::styled("○ 等待中", Style::default().fg(Color::DarkGray)),

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
 use crate::agent::{AgentOutput, AgentRunner};
@@ -84,6 +84,7 @@ pub enum Phase {
     AgentAReviewing,
     AgentBResponding,
     CheckConsensus,
+    WaitingForApply,
     ApplyChanges,
     Done,
 }
@@ -95,10 +96,16 @@ impl std::fmt::Display for Phase {
             Phase::AgentAReviewing => write!(f, "Agent A 审查中"),
             Phase::AgentBResponding => write!(f, "Agent B 回应中"),
             Phase::CheckConsensus => write!(f, "检测共识"),
+            Phase::WaitingForApply => write!(f, "等待确认修改"),
             Phase::ApplyChanges => write!(f, "修改代码中"),
             Phase::Done => write!(f, "已完成"),
         }
     }
+}
+
+/// Commands sent from the dashboard to the orchestrator.
+pub enum OrchestratorCommand {
+    ConfirmApply,
 }
 
 impl OrchestratorState {
@@ -136,9 +143,14 @@ pub async fn run(
     state_tx: watch::Sender<OrchestratorState>,
     no_apply: bool,
     start_rx: Option<tokio::sync::oneshot::Receiver<crate::config::StartConfig>>,
+    cmd_rx: Option<mpsc::Receiver<OrchestratorCommand>>,
 ) -> Result<()> {
     let mut state = OrchestratorState::new(&config);
+    let mut cmd_rx = cmd_rx;
     info!("编排器已启动");
+
+    // Whether the user wants manual apply confirmation
+    let mut auto_apply = true;
 
     // Wait for dashboard confirmation if a start signal receiver is provided
     if let Some(rx) = start_rx {
@@ -146,6 +158,7 @@ pub async fn run(
         match rx.await {
             Ok(sc) => {
                 info!("收到开始信号");
+                auto_apply = sc.auto_apply;
                 config.apply_start_config(sc);
                 // Re-initialize state from updated config
                 state = OrchestratorState::new(&config);
@@ -375,6 +388,84 @@ pub async fn run(
         // === Consensus reached — apply changes ===
         if no_apply {
             state.log(&format!("第{round}轮: 跳过代码修改 (--no-apply)"));
+            let _ = state_tx.send(state.clone());
+        } else if !auto_apply {
+            // Manual apply mode: wait for user confirmation
+            state.phase = Phase::WaitingForApply;
+            state.log(&format!("第{round}轮: 等待用户确认执行修改..."));
+            let _ = state_tx.send(state.clone());
+
+            let confirmed = if let Some(ref mut rx) = cmd_rx {
+                matches!(rx.recv().await, Some(OrchestratorCommand::ConfirmApply))
+            } else {
+                true // no channel means auto
+            };
+
+            if !confirmed {
+                state.log(&format!("第{round}轮: 用户取消修改"));
+                let _ = state_tx.send(state.clone());
+                // Skip to next round or finish
+                if round == config.review.max_rounds {
+                    state.log(&format!("已完成全部{}轮审查", config.review.max_rounds));
+                } else {
+                    state.log(&format!("第{round}轮完成，进入下一轮..."));
+                    let _ = state_tx.send(state.clone());
+                }
+                continue;
+            }
+
+            state.log(&format!("第{round}轮: 用户已确认，开始修改..."));
+            // fall through to the apply block below
+            state.phase = Phase::ApplyChanges;
+            state.log(&format!("第{round}轮: Agent B 开始根据共识修改代码..."));
+            let _ = state_tx.send(state.clone());
+
+            let apply_prompt = format!(
+                "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
+                 然后根据讨论中达成一致的改进意见，只选择最重要的 3 个高优先级问题，\
+                 阅读相关的源代码文件并直接修改代码来修复这 3 个问题。不要尝试修复所有问题。"
+            );
+
+            let apply_label = format!("第{round}轮 代码修改: Agent B ({})", agent_b.name);
+            match run_agent_with_heartbeat(
+                &agent_b,
+                &apply_prompt,
+                &project_path,
+                &apply_label,
+                &mut state,
+                &state_tx,
+            )
+            .await
+            {
+                Ok(output) => {
+                    conversation.append_agent_entry(
+                        &agent_b.name,
+                        "代码修改",
+                        &output.content,
+                    )?;
+                    match crate::conversation::append_changelog(
+                        &project_path,
+                        round,
+                        &output.content,
+                    ) {
+                        Ok(()) => {
+                            state.log("review_changelog.md 已更新");
+                        }
+                        Err(e) => {
+                            state.log(&format!("写入 review_changelog.md 失败: {e}"));
+                        }
+                    }
+                    state.log(&format!(
+                        "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
+                        output.duration.as_secs_f64()
+                    ));
+                }
+                Err(e) => {
+                    state.log(&format!("第{round}轮: Agent B 修改代码失败: {e}"));
+                }
+            }
+
+            state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
         } else {
             state.phase = Phase::ApplyChanges;

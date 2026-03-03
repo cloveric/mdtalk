@@ -82,21 +82,78 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
     false
 }
 
+/// Check if a keyword appears in the text in a negated context.
+fn has_negated_keyword(text: &str, keyword: &str) -> bool {
+    let kw_lower = keyword.to_lowercase();
+    let text_lower = text.to_lowercase();
+    let requires_word_boundary = kw_lower.chars().any(|ch| ch.is_ascii_alphabetic())
+        && kw_lower
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch.is_ascii_whitespace());
+
+    let mut search_from = 0;
+    while let Some(pos) = text_lower[search_from..].find(&kw_lower) {
+        let abs_pos = search_from + pos;
+        let abs_end = abs_pos + kw_lower.len();
+
+        if requires_word_boundary {
+            let before = text_lower[..abs_pos].chars().next_back();
+            let after = text_lower[abs_end..].chars().next();
+            let valid_boundary = !before.is_some_and(|ch| ch.is_ascii_alphabetic())
+                && !after.is_some_and(|ch| ch.is_ascii_alphabetic());
+            if !valid_boundary {
+                search_from = abs_end;
+                continue;
+            }
+        }
+
+        let mut context_start = abs_pos.saturating_sub(20);
+        while context_start > 0 && !text_lower.is_char_boundary(context_start) {
+            context_start -= 1;
+        }
+        let preceding = &text_lower[context_start..abs_pos];
+
+        let negated = NEGATION_PREFIXES
+            .iter()
+            .any(|neg| preceding.ends_with(neg) || preceding.trim_end().ends_with(neg.trim()));
+
+        if negated {
+            return true;
+        }
+
+        search_from = abs_end;
+    }
+
+    false
+}
+
+/// Check whether an agent's response shows unambiguous consensus.
+/// Returns false if the response contains mixed signals (both affirmative
+/// and negated consensus keywords).
+fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
+    let has_affirmative = keywords
+        .iter()
+        .any(|kw| has_affirmative_keyword(response, kw));
+    if !has_affirmative {
+        return false;
+    }
+    // If any keyword is negated elsewhere in the same response, treat as mixed signal
+    let has_negated = keywords.iter().any(|kw| has_negated_keyword(response, kw));
+    !has_negated
+}
+
 /// Check whether the latest round's content indicates consensus.
 pub fn check_consensus(
     agent_a_response: &str,
     agent_b_response: &str,
     keywords: &[String],
 ) -> ConsensusResult {
-    // Both agents must contain at least one affirmative consensus keyword
-    let a_has_keyword = keywords
-        .iter()
-        .any(|kw| has_affirmative_keyword(agent_a_response, kw));
-    let b_has_keyword = keywords
-        .iter()
-        .any(|kw| has_affirmative_keyword(agent_b_response, kw));
+    // Both agents must show unambiguous consensus (affirmative keywords
+    // without any negated keywords in the same response)
+    let a_consensus = agent_shows_consensus(agent_a_response, keywords);
+    let b_consensus = agent_shows_consensus(agent_b_response, keywords);
 
-    if a_has_keyword && b_has_keyword {
+    if a_consensus && b_consensus {
         return ConsensusResult {
             reached: true,
             summary: "双方均通过共识关键词表达了一致意见。".to_string(),
@@ -163,6 +220,28 @@ mod tests {
             "There is still disagreement on this part.",
             "I agree with the plan.",
             &kws(),
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn mixed_agree_and_disagree_not_consensus() {
+        // Agent A says "agree" and "don't agree" in the same response — mixed signal
+        let r = check_consensus(
+            "I agree with points 1-3, but I don't agree with point 4.",
+            "I agree with all the suggestions. LGTM.",
+            &kws(),
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn mixed_chinese_agree_disagree_not_consensus() {
+        let kws = vec!["同意".into()];
+        let r = check_consensus(
+            "我同意前三条建议，但不同意第四条。",
+            "我同意所有改进建议。",
+            &kws,
         );
         assert!(!r.reached);
     }

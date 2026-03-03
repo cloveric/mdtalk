@@ -4,6 +4,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::app::DashboardApp;
+use crate::orchestrator::Phase;
 
 /// Drain any buffered key events (e.g., Enter from launching the command).
 pub fn drain_buffered_events() {
@@ -33,7 +34,9 @@ fn handle_key(app: &mut DashboardApp, key: KeyEvent) {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => app.quit(),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => app.quit(),
+        KeyCode::Char('r') if app.state.finished => app.request_restart(),
         KeyCode::Enter if app.waiting_for_start => app.confirm_start(),
+        KeyCode::Enter if app.state.phase == Phase::WaitingForApply => app.confirm_apply(),
         KeyCode::Up | KeyCode::Char('k') if app.waiting_for_start => app.select_prev(),
         KeyCode::Down | KeyCode::Char('j') if app.waiting_for_start => app.select_next(),
         KeyCode::Left | KeyCode::Char('h') if app.waiting_for_start => app.adjust_left(),
