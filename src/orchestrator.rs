@@ -399,6 +399,11 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
+                    conversation.append_agent_entry(
+                        &agent_b.name,
+                        "代码修改",
+                        &output.content,
+                    )?;
                     state.log(&format!(
                         "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
                         output.duration.as_secs_f64()
