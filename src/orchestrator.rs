@@ -33,7 +33,11 @@ async fn run_agent_with_heartbeat(
             }
             _ = heartbeat.tick() => {
                 let elapsed = start.elapsed().as_secs();
-                state.log(&format!("{label} 运行中... (已{elapsed}秒)"));
+                state.log(&if state.is_en() {
+                    format!("{label} running... ({elapsed}s)")
+                } else {
+                    format!("{label} 运行中... (已{elapsed}秒)")
+                });
                 let _ = state_tx.send(state.clone());
             }
         }
@@ -76,6 +80,7 @@ pub struct OrchestratorState {
     pub logs: Vec<String>,
     pub conversation_preview: String,
     pub finished: bool,
+    pub language: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +125,7 @@ fn consume_shutdown_command(
                 Ok(OrchestratorCommand::Shutdown) => {
                     state.phase = Phase::Done;
                     state.finished = true;
-                    state.log("收到停止信号，提前结束本次会话");
+                    state.log(if state.is_en() { "Shutdown received, ending session" } else { "收到停止信号，提前结束本次会话" });
                     let _ = state_tx.send(state.clone());
                     return true;
                 }
@@ -150,7 +155,12 @@ impl OrchestratorState {
             logs: Vec::new(),
             conversation_preview: String::new(),
             finished: false,
+            language: "zh".to_string(),
         }
+    }
+
+    fn is_en(&self) -> bool {
+        self.language == "en"
     }
 
     fn log(&mut self, msg: &str) {
@@ -169,6 +179,7 @@ pub async fn run(
     mut config: MdtalkConfig,
     state_tx: watch::Sender<OrchestratorState>,
     no_apply: bool,
+    cli_apply_level: u32,
     start_rx: Option<tokio::sync::oneshot::Receiver<crate::config::StartConfig>>,
     cmd_rx: Option<mpsc::Receiver<OrchestratorCommand>>,
 ) -> Result<()> {
@@ -178,6 +189,7 @@ pub async fn run(
 
     // Whether the user wants manual apply confirmation
     let mut auto_apply = true;
+    let mut apply_level: u32 = cli_apply_level;
 
     // Wait for dashboard confirmation if a start signal receiver is provided
     if let Some(rx) = start_rx {
@@ -186,9 +198,12 @@ pub async fn run(
             Ok(sc) => {
                 info!("收到开始信号");
                 auto_apply = sc.auto_apply;
+                apply_level = sc.apply_level;
+                let lang = sc.language.clone();
                 config.apply_start_config(sc);
                 // Re-initialize state from updated config
                 state = OrchestratorState::new(&config);
+                state.language = lang;
                 let _ = state_tx.send(state.clone());
             }
             Err(_) => {
@@ -199,7 +214,7 @@ pub async fn run(
     }
 
     state.session_start = Some(Instant::now());
-    state.log("MDTalk 会话启动");
+    state.log(if state.is_en() { "MDTalk session started" } else { "MDTalk 会话启动" });
     let _ = state_tx.send(state.clone());
 
     let project_path: PathBuf = config.project.path.clone();
@@ -224,10 +239,11 @@ pub async fn run(
     // === Outer loop: rounds (each round = discussion → consensus → code fix) ===
     for round in 1..=config.review.max_rounds {
         state.current_round = round;
-        state.log(&format!(
-            "===== 第{round}轮审查开始 (共{}轮) =====",
-            config.review.max_rounds
-        ));
+        state.log(&if state.is_en() {
+            format!("===== Round {round} started ({} total) =====", config.review.max_rounds)
+        } else {
+            format!("===== 第{round}轮审查开始 (共{}轮) =====", config.review.max_rounds)
+        });
         let _ = state_tx.send(state.clone());
 
         if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
@@ -259,10 +275,11 @@ pub async fn run(
 
             // --- Agent A reviews ---
             state.phase = Phase::AgentAReviewing;
-            state.log(&format!(
-                "第{round}轮 讨论{exchange}: Agent A ({}) 开始审查",
-                agent_a.name
-            ));
+            state.log(&if state.is_en() {
+                format!("R{round} E{exchange}: Agent A ({}) reviewing", agent_a.name)
+            } else {
+                format!("第{round}轮 讨论{exchange}: Agent A ({}) 开始审查", agent_a.name)
+            });
             let _ = state_tx.send(state.clone());
 
             let a_prompt = match exchange_kind {
@@ -316,14 +333,19 @@ pub async fn run(
                         ExchangeKind::FollowUp => "后续讨论",
                     };
                     conversation.append_agent_entry(&agent_a.name, label, &output.content)?;
-                    state.log(&format!(
-                        "第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)",
-                        output.duration.as_secs_f64()
-                    ));
+                    state.log(&if state.is_en() {
+                        format!("R{round} E{exchange}: Agent A done ({:.0}s)", output.duration.as_secs_f64())
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)", output.duration.as_secs_f64())
+                    });
                 }
                 Err(e) => {
                     error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
-                    state.log(&format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}"));
+                    state.log(&if state.is_en() {
+                        format!("R{round} E{exchange}: Agent A failed: {e}")
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}")
+                    });
                     let _ = state_tx.send(state.clone());
                     execution_error = Some(anyhow::anyhow!(
                         "第{round}轮 讨论{exchange}: Agent A 执行失败: {e}"
@@ -337,10 +359,11 @@ pub async fn run(
 
             // --- Agent B responds ---
             state.phase = Phase::AgentBResponding;
-            state.log(&format!(
-                "第{round}轮 讨论{exchange}: Agent B ({}) 开始回应",
-                agent_b.name
-            ));
+            state.log(&if state.is_en() {
+                format!("R{round} E{exchange}: Agent B ({}) responding", agent_b.name)
+            } else {
+                format!("第{round}轮 讨论{exchange}: Agent B ({}) 开始回应", agent_b.name)
+            });
             let _ = state_tx.send(state.clone());
 
             let b_prompt = format!(
@@ -369,14 +392,19 @@ pub async fn run(
                 Ok(output) => {
                     last_b_response = output.content.clone();
                     conversation.append_agent_entry(&agent_b.name, "回应", &output.content)?;
-                    state.log(&format!(
-                        "第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)",
-                        output.duration.as_secs_f64()
-                    ));
+                    state.log(&if state.is_en() {
+                        format!("R{round} E{exchange}: Agent B done ({:.0}s)", output.duration.as_secs_f64())
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)", output.duration.as_secs_f64())
+                    });
                 }
                 Err(e) => {
                     error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
-                    state.log(&format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}"));
+                    state.log(&if state.is_en() {
+                        format!("R{round} E{exchange}: Agent B failed: {e}")
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}")
+                    });
                     let _ = state_tx.send(state.clone());
                     execution_error = Some(anyhow::anyhow!(
                         "第{round}轮 讨论{exchange}: Agent B 执行失败: {e}"
@@ -399,15 +427,21 @@ pub async fn run(
             );
 
             if result.reached {
-                state.log(&format!("第{round}轮 讨论{exchange}: 达成共识"));
+                state.log(&if state.is_en() {
+                    format!("R{round} E{exchange}: consensus reached")
+                } else {
+                    format!("第{round}轮 讨论{exchange}: 达成共识")
+                });
                 conversation.append_consensus(&result.summary)?;
                 consensus_reached = true;
                 break;
             }
 
-            state.log(&format!(
-                "第{round}轮 讨论{exchange}: 未达成共识，继续讨论..."
-            ));
+            state.log(&if state.is_en() {
+                format!("R{round} E{exchange}: no consensus, continuing...")
+            } else {
+                format!("第{round}轮 讨论{exchange}: 未达成共识，继续讨论...")
+            });
             let _ = state_tx.send(state.clone());
         }
 
@@ -425,10 +459,11 @@ pub async fn run(
             // This round failed to reach consensus
             state.phase = Phase::Done;
             state.finished = true;
-            state.log(&format!(
-                "第{round}轮: {}次讨论后仍未达成共识，审查结束",
-                config.review.max_exchanges
-            ));
+            state.log(&if state.is_en() {
+                format!("Round {round}: no consensus after {} exchanges, review ended", config.review.max_exchanges)
+            } else {
+                format!("第{round}轮: {}次讨论后仍未达成共识，审查结束", config.review.max_exchanges)
+            });
             state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
             info!("第{round}轮审查未能达成共识");
@@ -437,13 +472,21 @@ pub async fn run(
 
         // === Consensus reached — apply changes ===
         if no_apply {
-            state.log(&format!("第{round}轮: 跳过代码修改 (--no-apply)"));
+            state.log(&if state.is_en() {
+                format!("Round {round}: skipping apply (--no-apply)")
+            } else {
+                format!("第{round}轮: 跳过代码修改 (--no-apply)")
+            });
             let _ = state_tx.send(state.clone());
         } else {
             if !auto_apply {
                 // Manual apply mode: wait for user confirmation
                 state.phase = Phase::WaitingForApply;
-                state.log(&format!("第{round}轮: 等待用户确认执行修改..."));
+                state.log(&if state.is_en() {
+                    format!("Round {round}: waiting for apply confirmation...")
+                } else {
+                    format!("第{round}轮: 等待用户确认执行修改...")
+                });
                 let _ = state_tx.send(state.clone());
 
                 let mut shutdown_requested = false;
@@ -465,26 +508,42 @@ pub async fn run(
                 if shutdown_requested {
                     state.phase = Phase::Done;
                     state.finished = true;
-                    state.log("收到停止信号，提前结束本次会话");
+                    state.log(if state.is_en() { "Shutdown received, ending session" } else { "收到停止信号，提前结束本次会话" });
                     state.update_preview(&conversation);
                     let _ = state_tx.send(state.clone());
                     return Ok(());
                 }
 
                 if !confirmed {
-                    state.log(&format!("第{round}轮: 用户取消修改"));
+                    state.log(&if state.is_en() {
+                        format!("Round {round}: user cancelled apply")
+                    } else {
+                        format!("第{round}轮: 用户取消修改")
+                    });
                     let _ = state_tx.send(state.clone());
                     // Skip to next round or finish
                     if round == config.review.max_rounds {
-                        state.log(&format!("已完成全部{}轮审查", config.review.max_rounds));
+                        state.log(&if state.is_en() {
+                        format!("All {} rounds completed", config.review.max_rounds)
                     } else {
-                        state.log(&format!("第{round}轮完成，进入下一轮..."));
+                        format!("已完成全部{}轮审查", config.review.max_rounds)
+                    });
+                    } else {
+                        state.log(&if state.is_en() {
+                        format!("Round {round} done, next round...")
+                    } else {
+                        format!("第{round}轮完成，进入下一轮...")
+                    });
                         let _ = state_tx.send(state.clone());
                     }
                     continue;
                 }
 
-                state.log(&format!("第{round}轮: 用户已确认，开始修改..."));
+                state.log(&if state.is_en() {
+                    format!("Round {round}: user confirmed, applying...")
+                } else {
+                    format!("第{round}轮: 用户已确认，开始修改...")
+                });
             }
 
             if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
@@ -492,13 +551,21 @@ pub async fn run(
             }
 
             state.phase = Phase::ApplyChanges;
-            state.log(&format!("第{round}轮: Agent B 开始根据共识修改代码..."));
+            state.log(&if state.is_en() {
+                format!("Round {round}: Agent B applying changes...")
+            } else {
+                format!("第{round}轮: Agent B 开始根据共识修改代码...")
+            });
             let _ = state_tx.send(state.clone());
 
+            let apply_instruction = match apply_level {
+                2 => "选择高优先级和中优先级问题，阅读相关的源代码文件并直接修改代码来修复这些问题。低优先级问题暂不处理。",
+                3 => "修复所有已达成共识的问题，阅读相关的源代码文件并直接修改代码。",
+                _ => "选择所有高优先级问题，阅读相关的源代码文件并直接修改代码来修复。中低优先级问题暂不处理。",
+            };
             let apply_prompt = format!(
                 "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
-                 然后根据讨论中达成一致的改进意见，只选择最重要的 3 个高优先级问题，\
-                 阅读相关的源代码文件并直接修改代码来修复这 3 个问题。不要尝试修复所有问题。"
+                 然后根据讨论中达成一致的改进意见，{apply_instruction}"
             );
 
             let apply_label = format!("第{round}轮 代码修改: Agent B ({})", agent_b.name);
@@ -517,21 +584,30 @@ pub async fn run(
                     if let Err(e) =
                         crate::conversation::append_changelog(&project_path, round, &output.content)
                     {
-                        state.log(&format!("写入 review_changelog.md 失败: {e}"));
+                        state.log(&if state.is_en() {
+                        format!("Failed to write review_changelog.md: {e}")
+                    } else {
+                        format!("写入 review_changelog.md 失败: {e}")
+                    });
                         state.update_preview(&conversation);
                         let _ = state_tx.send(state.clone());
                         return Err(anyhow::anyhow!(
                             "第{round}轮: 写入 review_changelog.md 失败: {e}"
                         ));
                     }
-                    state.log("review_changelog.md 已更新");
-                    state.log(&format!(
-                        "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
-                        output.duration.as_secs_f64()
-                    ));
+                    state.log(if state.is_en() { "review_changelog.md updated" } else { "review_changelog.md 已更新" });
+                    state.log(&if state.is_en() {
+                        format!("Round {round}: Agent B apply done ({:.0}s)", output.duration.as_secs_f64())
+                    } else {
+                        format!("第{round}轮: Agent B 已完成代码修改 ({:.0}秒)", output.duration.as_secs_f64())
+                    });
                 }
                 Err(e) => {
-                    state.log(&format!("第{round}轮: Agent B 修改代码失败: {e}"));
+                    state.log(&if state.is_en() {
+                        format!("Round {round}: Agent B apply failed: {e}")
+                    } else {
+                        format!("第{round}轮: Agent B 修改代码失败: {e}")
+                    });
                     state.update_preview(&conversation);
                     let _ = state_tx.send(state.clone());
                     return Err(anyhow::anyhow!("第{round}轮: Agent B 修改代码失败: {e}"));
@@ -544,9 +620,17 @@ pub async fn run(
 
         // Check if this was the last round
         if round == config.review.max_rounds {
-            state.log(&format!("已完成全部{}轮审查", config.review.max_rounds));
+            state.log(&if state.is_en() {
+                        format!("All {} rounds completed", config.review.max_rounds)
+                    } else {
+                        format!("已完成全部{}轮审查", config.review.max_rounds)
+                    });
         } else {
-            state.log(&format!("第{round}轮完成，进入下一轮..."));
+            state.log(&if state.is_en() {
+                        format!("Round {round} done, next round...")
+                    } else {
+                        format!("第{round}轮完成，进入下一轮...")
+                    });
             let _ = state_tx.send(state.clone());
         }
     }
@@ -700,7 +784,7 @@ mod tests {
         let cfg = test_config(project_dir.clone(), fail_cmd, ok_cmd);
         let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
 
-        let result = run(cfg, state_tx, true, None, None).await;
+        let result = run(cfg, state_tx, true, 1, None, None).await;
         assert!(
             result.is_err(),
             "Agent A execution failure should return Err"
@@ -716,7 +800,7 @@ mod tests {
         let cfg = test_config(project_dir.clone(), a_ok_cmd, b_cmd);
         let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
 
-        let result = run(cfg, state_tx, false, None, None).await;
+        let result = run(cfg, state_tx, false, 1, None, None).await;
         assert!(result.is_err(), "Apply-phase failure should return Err");
         let _ = fs::remove_dir_all(project_dir);
     }

@@ -43,6 +43,10 @@ impl AgentRunner {
                 "--dangerously-bypass-approvals-and-sandbox".to_string(),
                 prompt.to_string(),
             ],
+            "gemini" => vec![
+                "--approval-mode=yolo".to_string(),
+                prompt.to_string(),
+            ],
             // Generic fallback: just pass prompt as a single arg
             _ => vec![prompt.to_string()],
         }
@@ -229,5 +233,11 @@ mod tests {
             args.iter()
                 .any(|arg| arg == "--dangerously-skip-permissions")
         );
+    }
+
+    #[test]
+    fn gemini_uses_yolo_mode() {
+        let args = runner("gemini").build_args("hello");
+        assert!(args.iter().any(|arg| arg == "--approval-mode=yolo"));
     }
 }

@@ -131,6 +131,7 @@ pub fn render_demo() -> Result<()> {
         max_exchanges: 5,
         agent_a_name: "claude".to_string(),
         agent_b_name: "codex".to_string(),
+        language: "en".to_string(),
         round_durations: vec![Duration::from_secs(150)],
         session_start: Some(Instant::now() - Duration::from_secs(222)),
         logs: vec![

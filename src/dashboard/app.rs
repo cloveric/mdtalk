@@ -21,6 +21,8 @@ pub struct DashboardApp {
     pub edit_rounds: u32,
     pub edit_exchanges: u32,
     pub auto_apply: bool,
+    pub apply_level: u32,
+    pub language: String,
 }
 
 impl DashboardApp {
@@ -59,6 +61,8 @@ impl DashboardApp {
             edit_rounds,
             edit_exchanges,
             auto_apply: true,
+            apply_level: 1,
+            language: "en".to_string(),
         }
     }
 
@@ -67,13 +71,13 @@ impl DashboardApp {
         if self.selected_field > 0 {
             self.selected_field -= 1;
         } else {
-            self.selected_field = 4;
+            self.selected_field = 6;
         }
     }
 
     /// Move selection to next field.
     pub fn select_next(&mut self) {
-        if self.selected_field < 4 {
+        if self.selected_field < 6 {
             self.selected_field += 1;
         } else {
             self.selected_field = 0;
@@ -89,6 +93,8 @@ impl DashboardApp {
             2 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
             3 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
             4 => self.auto_apply = !self.auto_apply,
+            5 => self.apply_level = if self.apply_level <= 1 { 3 } else { self.apply_level - 1 },
+            6 => self.language = if self.language == "en" { "zh".to_string() } else { "en".to_string() },
             _ => {}
         }
     }
@@ -102,6 +108,8 @@ impl DashboardApp {
             2 => self.edit_rounds = (self.edit_rounds + 1).min(10),
             3 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
             4 => self.auto_apply = !self.auto_apply,
+            5 => self.apply_level = if self.apply_level >= 3 { 1 } else { self.apply_level + 1 },
+            6 => self.language = if self.language == "en" { "zh".to_string() } else { "en".to_string() },
             _ => {}
         }
     }
@@ -115,6 +123,8 @@ impl DashboardApp {
                 max_rounds: self.edit_rounds,
                 max_exchanges: self.edit_exchanges,
                 auto_apply: self.auto_apply,
+                apply_level: self.apply_level,
+                language: self.language.clone(),
             };
             let _ = tx.send(sc);
             self.waiting_for_start = false;

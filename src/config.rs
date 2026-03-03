@@ -122,6 +122,8 @@ pub struct StartConfig {
     pub max_rounds: u32,
     pub max_exchanges: u32,
     pub auto_apply: bool,
+    pub apply_level: u32,
+    pub language: String,
 }
 
 impl MdtalkConfig {

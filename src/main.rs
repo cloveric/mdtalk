@@ -51,6 +51,10 @@ struct Cli {
     #[arg(long)]
     no_apply: bool,
 
+    /// Apply severity level: 1=高 only, 2=高+中, 3=all (default: 1)
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=3), default_value = "1")]
+    apply_level: u32,
+
     /// Render one dashboard frame with mock data and exit (for preview)
     #[arg(long)]
     demo: bool,
@@ -96,7 +100,7 @@ async fn main() -> Result<()> {
 
         let (state_tx, _state_rx) = watch::channel(orchestrator::OrchestratorState::new(&cfg));
         info!("MDTalk 审查启动 (无仪表盘模式)");
-        orchestrator::run(cfg, state_tx, cli.no_apply, None, None).await?;
+        orchestrator::run(cfg, state_tx, cli.no_apply, cli.apply_level, None, None).await?;
     } else {
         // Dashboard mode: tracing goes to a log file
         match std::fs::File::create("mdtalk.log") {
@@ -125,8 +129,9 @@ async fn main() -> Result<()> {
             let (cmd_tx, cmd_rx) = mpsc::channel::<orchestrator::OrchestratorCommand>(1);
             let cmd_tx_shutdown = cmd_tx.clone();
 
+            let apply_level = cli.apply_level;
             let mut orchestrator_handle = tokio::spawn(async move {
-                orchestrator::run(cfg_clone, state_tx, no_apply, Some(start_rx), Some(cmd_rx)).await
+                orchestrator::run(cfg_clone, state_tx, no_apply, apply_level, Some(start_rx), Some(cmd_rx)).await
             });
 
             let dashboard_handle =
