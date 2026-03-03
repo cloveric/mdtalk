@@ -6,6 +6,7 @@ mod dashboard;
 mod orchestrator;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -122,17 +123,17 @@ async fn main() -> Result<()> {
                 watch::channel(orchestrator::OrchestratorState::new(&cfg_clone));
             let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
             let (cmd_tx, cmd_rx) = mpsc::channel::<orchestrator::OrchestratorCommand>(1);
+            let cmd_tx_shutdown = cmd_tx.clone();
 
-            let orchestrator_handle = tokio::spawn(async move {
-                orchestrator::run(cfg_clone, state_tx, no_apply, Some(start_rx), Some(cmd_rx))
-                    .await
+            let mut orchestrator_handle = tokio::spawn(async move {
+                orchestrator::run(cfg_clone, state_tx, no_apply, Some(start_rx), Some(cmd_rx)).await
             });
 
             let dashboard_handle =
                 tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx, cmd_tx));
 
             // Wait for dashboard to finish (user presses q or orchestrator sets finished).
-            // Then abort orchestrator if it's still running.
+            // Then request graceful orchestrator shutdown.
             let orch_abort = orchestrator_handle.abort_handle();
 
             let dash_result = dashboard_handle.await;
@@ -148,14 +149,26 @@ async fn main() -> Result<()> {
                 }
             };
 
-            // Dashboard exited — abort orchestrator if still running
-            orch_abort.abort();
-            // Wait for orchestrator to finish (may already be done or just aborted)
-            match orchestrator_handle.await {
-                Ok(Err(e)) => eprintln!("Orchestrator error: {e}"),
-                Err(e) if e.is_cancelled() => {} // expected if we aborted
-                Err(e) => eprintln!("Orchestrator panic: {e}"),
-                _ => {}
+            // Dashboard exited — request graceful stop first, then force abort on timeout.
+            if !orchestrator_handle.is_finished() {
+                let _ = cmd_tx_shutdown.try_send(orchestrator::OrchestratorCommand::Shutdown);
+            }
+
+            match tokio::time::timeout(Duration::from_secs(3), &mut orchestrator_handle).await {
+                Ok(join_result) => match join_result {
+                    Ok(Err(e)) => eprintln!("Orchestrator error: {e}"),
+                    Err(e) => eprintln!("Orchestrator panic: {e}"),
+                    _ => {}
+                },
+                Err(_) => {
+                    orch_abort.abort();
+                    match orchestrator_handle.await {
+                        Ok(Err(e)) => eprintln!("Orchestrator error: {e}"),
+                        Err(e) if e.is_cancelled() => {} // expected if we aborted
+                        Err(e) => eprintln!("Orchestrator panic: {e}"),
+                        _ => {}
+                    }
+                }
             }
 
             match exit {

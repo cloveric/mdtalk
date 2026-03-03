@@ -106,6 +106,33 @@ impl std::fmt::Display for Phase {
 /// Commands sent from the dashboard to the orchestrator.
 pub enum OrchestratorCommand {
     ConfirmApply,
+    Shutdown,
+}
+
+fn consume_shutdown_command(
+    cmd_rx: &mut Option<mpsc::Receiver<OrchestratorCommand>>,
+    state: &mut OrchestratorState,
+    state_tx: &watch::Sender<OrchestratorState>,
+) -> bool {
+    if let Some(rx) = cmd_rx.as_mut() {
+        loop {
+            match rx.try_recv() {
+                Ok(OrchestratorCommand::Shutdown) => {
+                    state.phase = Phase::Done;
+                    state.finished = true;
+                    state.log("收到停止信号，提前结束本次会话");
+                    let _ = state_tx.send(state.clone());
+                    return true;
+                }
+                Ok(OrchestratorCommand::ConfirmApply) => {
+                    // Ignore stale confirm commands outside the apply-confirm phase.
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+    false
 }
 
 impl OrchestratorState {
@@ -203,8 +230,13 @@ pub async fn run(
         ));
         let _ = state_tx.send(state.clone());
 
+        if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+            return Ok(());
+        }
+
         let round_start = Instant::now();
         let mut consensus_reached = false;
+        let mut execution_error: Option<anyhow::Error> = None;
 
         #[allow(unused_assignments)]
         let mut last_a_response = String::new();
@@ -215,6 +247,10 @@ pub async fn run(
         for exchange in 1..=config.review.max_exchanges {
             state.current_exchange = exchange;
             let exchange_kind = classify_exchange(round, exchange);
+
+            if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+                return Ok(());
+            }
 
             // Round header is written once for each outer round.
             if should_append_round_header(exchange) {
@@ -289,6 +325,9 @@ pub async fn run(
                     error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
                     state.log(&format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}"));
                     let _ = state_tx.send(state.clone());
+                    execution_error = Some(anyhow::anyhow!(
+                        "第{round}轮 讨论{exchange}: Agent A 执行失败: {e}"
+                    ));
                     break;
                 }
             }
@@ -339,6 +378,9 @@ pub async fn run(
                     error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
                     state.log(&format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}"));
                     let _ = state_tx.send(state.clone());
+                    execution_error = Some(anyhow::anyhow!(
+                        "第{round}轮 讨论{exchange}: Agent B 执行失败: {e}"
+                    ));
                     break;
                 }
             }
@@ -371,6 +413,14 @@ pub async fn run(
 
         state.round_durations.push(round_start.elapsed());
 
+        if let Some(err) = execution_error {
+            state.phase = Phase::Done;
+            state.finished = true;
+            state.update_preview(&conversation);
+            let _ = state_tx.send(state.clone());
+            return Err(err);
+        }
+
         if !consensus_reached {
             // This round failed to reach consensus
             state.phase = Phase::Done;
@@ -389,85 +439,58 @@ pub async fn run(
         if no_apply {
             state.log(&format!("第{round}轮: 跳过代码修改 (--no-apply)"));
             let _ = state_tx.send(state.clone());
-        } else if !auto_apply {
-            // Manual apply mode: wait for user confirmation
-            state.phase = Phase::WaitingForApply;
-            state.log(&format!("第{round}轮: 等待用户确认执行修改..."));
-            let _ = state_tx.send(state.clone());
-
-            let confirmed = if let Some(ref mut rx) = cmd_rx {
-                matches!(rx.recv().await, Some(OrchestratorCommand::ConfirmApply))
-            } else {
-                true // no channel means auto
-            };
-
-            if !confirmed {
-                state.log(&format!("第{round}轮: 用户取消修改"));
-                let _ = state_tx.send(state.clone());
-                // Skip to next round or finish
-                if round == config.review.max_rounds {
-                    state.log(&format!("已完成全部{}轮审查", config.review.max_rounds));
-                } else {
-                    state.log(&format!("第{round}轮完成，进入下一轮..."));
-                    let _ = state_tx.send(state.clone());
-                }
-                continue;
-            }
-
-            state.log(&format!("第{round}轮: 用户已确认，开始修改..."));
-            // fall through to the apply block below
-            state.phase = Phase::ApplyChanges;
-            state.log(&format!("第{round}轮: Agent B 开始根据共识修改代码..."));
-            let _ = state_tx.send(state.clone());
-
-            let apply_prompt = format!(
-                "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
-                 然后根据讨论中达成一致的改进意见，只选择最重要的 3 个高优先级问题，\
-                 阅读相关的源代码文件并直接修改代码来修复这 3 个问题。不要尝试修复所有问题。"
-            );
-
-            let apply_label = format!("第{round}轮 代码修改: Agent B ({})", agent_b.name);
-            match run_agent_with_heartbeat(
-                &agent_b,
-                &apply_prompt,
-                &project_path,
-                &apply_label,
-                &mut state,
-                &state_tx,
-            )
-            .await
-            {
-                Ok(output) => {
-                    conversation.append_agent_entry(
-                        &agent_b.name,
-                        "代码修改",
-                        &output.content,
-                    )?;
-                    match crate::conversation::append_changelog(
-                        &project_path,
-                        round,
-                        &output.content,
-                    ) {
-                        Ok(()) => {
-                            state.log("review_changelog.md 已更新");
-                        }
-                        Err(e) => {
-                            state.log(&format!("写入 review_changelog.md 失败: {e}"));
-                        }
-                    }
-                    state.log(&format!(
-                        "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
-                        output.duration.as_secs_f64()
-                    ));
-                }
-                Err(e) => {
-                    state.log(&format!("第{round}轮: Agent B 修改代码失败: {e}"));
-                }
-            }
-
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
         } else {
+            if !auto_apply {
+                // Manual apply mode: wait for user confirmation
+                state.phase = Phase::WaitingForApply;
+                state.log(&format!("第{round}轮: 等待用户确认执行修改..."));
+                let _ = state_tx.send(state.clone());
+
+                let mut shutdown_requested = false;
+                let confirmed = if let Some(ref mut rx) = cmd_rx {
+                    loop {
+                        match rx.recv().await {
+                            Some(OrchestratorCommand::ConfirmApply) => break true,
+                            Some(OrchestratorCommand::Shutdown) => {
+                                shutdown_requested = true;
+                                break false;
+                            }
+                            None => break true,
+                        }
+                    }
+                } else {
+                    true // no channel means auto
+                };
+
+                if shutdown_requested {
+                    state.phase = Phase::Done;
+                    state.finished = true;
+                    state.log("收到停止信号，提前结束本次会话");
+                    state.update_preview(&conversation);
+                    let _ = state_tx.send(state.clone());
+                    return Ok(());
+                }
+
+                if !confirmed {
+                    state.log(&format!("第{round}轮: 用户取消修改"));
+                    let _ = state_tx.send(state.clone());
+                    // Skip to next round or finish
+                    if round == config.review.max_rounds {
+                        state.log(&format!("已完成全部{}轮审查", config.review.max_rounds));
+                    } else {
+                        state.log(&format!("第{round}轮完成，进入下一轮..."));
+                        let _ = state_tx.send(state.clone());
+                    }
+                    continue;
+                }
+
+                state.log(&format!("第{round}轮: 用户已确认，开始修改..."));
+            }
+
+            if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+                return Ok(());
+            }
+
             state.phase = Phase::ApplyChanges;
             state.log(&format!("第{round}轮: Agent B 开始根据共识修改代码..."));
             let _ = state_tx.send(state.clone());
@@ -490,23 +513,18 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
-                    conversation.append_agent_entry(
-                        &agent_b.name,
-                        "代码修改",
-                        &output.content,
-                    )?;
-                    match crate::conversation::append_changelog(
-                        &project_path,
-                        round,
-                        &output.content,
-                    ) {
-                        Ok(()) => {
-                            state.log("review_changelog.md 已更新");
-                        }
-                        Err(e) => {
-                            state.log(&format!("写入 review_changelog.md 失败: {e}"));
-                        }
+                    conversation.append_agent_entry(&agent_b.name, "代码修改", &output.content)?;
+                    if let Err(e) =
+                        crate::conversation::append_changelog(&project_path, round, &output.content)
+                    {
+                        state.log(&format!("写入 review_changelog.md 失败: {e}"));
+                        state.update_preview(&conversation);
+                        let _ = state_tx.send(state.clone());
+                        return Err(anyhow::anyhow!(
+                            "第{round}轮: 写入 review_changelog.md 失败: {e}"
+                        ));
                     }
+                    state.log("review_changelog.md 已更新");
                     state.log(&format!(
                         "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
                         output.duration.as_secs_f64()
@@ -514,6 +532,9 @@ pub async fn run(
                 }
                 Err(e) => {
                     state.log(&format!("第{round}轮: Agent B 修改代码失败: {e}"));
+                    state.update_preview(&conversation);
+                    let _ = state_tx.send(state.clone());
+                    return Err(anyhow::anyhow!("第{round}轮: Agent B 修改代码失败: {e}"));
                 }
             }
 
@@ -540,7 +561,119 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExchangeKind, classify_exchange, should_append_round_header};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use tokio::sync::watch;
+
+    use super::{
+        ExchangeKind, OrchestratorState, classify_exchange, run, should_append_round_header,
+    };
+    use crate::config::{AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig};
+
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mdtalk-{name}-{}-{id}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("failed to create test dir");
+        dir
+    }
+
+    #[cfg(windows)]
+    fn write_script(dir: &Path, name: &str, body: &str) -> String {
+        let path = dir.join(format!("{name}.cmd"));
+        let content = format!("@echo off\r\n{body}\r\n");
+        fs::write(&path, content).expect("failed to write windows script");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    fn write_script(dir: &Path, name: &str, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join(name);
+        let content = format!("#!/usr/bin/env bash\nset -euo pipefail\n{body}\n");
+        fs::write(&path, content).expect("failed to write unix script");
+        let mut perms = fs::metadata(&path)
+            .expect("failed to stat unix script")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("failed to chmod unix script");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn test_config(
+        project_path: PathBuf,
+        agent_a_cmd: String,
+        agent_b_cmd: String,
+    ) -> MdtalkConfig {
+        MdtalkConfig {
+            project: ProjectConfig { path: project_path },
+            agent_a: AgentConfig {
+                name: "agent-a".to_string(),
+                command: agent_a_cmd,
+                timeout_secs: 10,
+            },
+            agent_b: AgentConfig {
+                name: "agent-b".to_string(),
+                command: agent_b_cmd,
+                timeout_secs: 10,
+            },
+            review: ReviewConfig {
+                max_rounds: 1,
+                max_exchanges: 1,
+                consensus_keywords: vec!["I agree".to_string()],
+                output_file: "conversation.md".to_string(),
+            },
+            dashboard: DashboardConfig {
+                refresh_rate_ms: 100,
+            },
+        }
+    }
+
+    fn script_always_fail(dir: &Path, name: &str) -> String {
+        #[cfg(windows)]
+        {
+            return write_script(dir, name, "echo failed 1>&2\r\nexit /b 1");
+        }
+        #[cfg(unix)]
+        {
+            return write_script(dir, name, "echo failed >&2\nexit 1");
+        }
+    }
+
+    fn script_always_agree(dir: &Path, name: &str) -> String {
+        #[cfg(windows)]
+        {
+            return write_script(dir, name, "echo I agree\r\nexit /b 0");
+        }
+        #[cfg(unix)]
+        {
+            return write_script(dir, name, "echo \"I agree\"\nexit 0");
+        }
+    }
+
+    fn script_fail_on_second_invocation(dir: &Path, name: &str) -> String {
+        #[cfg(windows)]
+        {
+            return write_script(
+                dir,
+                name,
+                "set MARKER_FILE=%~dp0agent_b_called_once.flag\r\nif exist \"%MARKER_FILE%\" (\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\necho called>\"%MARKER_FILE%\"\r\necho I agree\r\nexit /b 0",
+            );
+        }
+        #[cfg(unix)]
+        {
+            return write_script(
+                dir,
+                name,
+                "MARKER_FILE=\"$(dirname \"$0\")/agent_b_called_once.flag\"\nif [ -f \"$MARKER_FILE\" ]; then\n  echo \"apply failed\" >&2\n  exit 1\nfi\necho called > \"$MARKER_FILE\"\necho \"I agree\"\nexit 0",
+            );
+        }
+    }
 
     #[test]
     fn first_exchange_in_first_round_is_initial_review() {
@@ -557,5 +690,34 @@ mod tests {
         assert!(should_append_round_header(1));
         assert!(!should_append_round_header(2));
         assert!(!should_append_round_header(3));
+    }
+
+    #[tokio::test]
+    async fn returns_err_when_agent_a_discussion_fails() {
+        let project_dir = unique_test_dir("agent-a-fails");
+        let fail_cmd = script_always_fail(&project_dir, "agent_a_fail");
+        let ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir.clone(), fail_cmd, ok_cmd);
+        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+
+        let result = run(cfg, state_tx, true, None, None).await;
+        assert!(
+            result.is_err(),
+            "Agent A execution failure should return Err"
+        );
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn returns_err_when_apply_phase_fails() {
+        let project_dir = unique_test_dir("apply-fails");
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_cmd = script_fail_on_second_invocation(&project_dir, "agent_b_fail_on_second_call");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd, b_cmd);
+        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+
+        let result = run(cfg, state_tx, false, None, None).await;
+        assert!(result.is_err(), "Apply-phase failure should return Err");
+        let _ = fs::remove_dir_all(project_dir);
     }
 }

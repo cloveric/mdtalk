@@ -64,22 +64,24 @@ impl AgentRunner {
         let mut child = if cfg!(windows) {
             let mut full_args = vec!["/C".to_string(), self.command.clone()];
             full_args.extend(args.clone());
-            Command::new("cmd")
+            let mut cmd = Command::new("cmd");
+            cmd.kill_on_drop(true)
                 .args(&full_args)
                 .current_dir(project_path)
                 .env_remove("CLAUDECODE")
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
+                .stderr(std::process::Stdio::piped());
+            cmd.spawn()
                 .with_context(|| format!("Failed to spawn agent '{}'", self.name))?
         } else {
-            Command::new(&self.command)
+            let mut cmd = Command::new(&self.command);
+            cmd.kill_on_drop(true)
                 .args(&args)
                 .current_dir(project_path)
                 .env_remove("CLAUDECODE")
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
+                .stderr(std::process::Stdio::piped());
+            cmd.spawn()
                 .with_context(|| format!("Failed to spawn agent '{}'", self.name))?
         };
 
@@ -214,16 +216,18 @@ mod tests {
     #[test]
     fn codex_uses_dangerous_bypass_mode() {
         let args = runner("codex").build_args("hello");
-        assert!(args
-            .iter()
-            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
     }
 
     #[test]
     fn claude_uses_dangerous_skip_permissions() {
         let args = runner("claude").build_args("hello");
-        assert!(args
-            .iter()
-            .any(|arg| arg == "--dangerously-skip-permissions"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--dangerously-skip-permissions")
+        );
     }
 }
