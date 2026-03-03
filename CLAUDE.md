@@ -249,10 +249,12 @@ refresh_rate_ms = 500
 - [ ] Codex apply 阶段应使用不同于审查阶段的 sandbox 参数（当前统一使用 `--full-auto`）
 
 ### 自检发现的问题（待修复）
-以下问题由 MDTalk 自检（3 轮 claude+claude 审查）发现，全部经源代码验证确认：
+以下问题由 MDTalk 自检发现（claude+claude 14 条全部确认，codex+codex 7 条中 5 条成立）：
 - [ ] **[高]** apply 阶段 ~50 行重复代码（手动模式和自动模式）→ 提取 `run_apply_phase()` 函数
 - [ ] **[高]** 共识检测缺少转折词处理（"I agree, however..." 会被误判为共识）→ 增加 but/however/但是 检测
+- [ ] **[高]** Dashboard `enable_raw_mode()` 后 `execute!`/`Terminal::new` 失败时终端不恢复 → 用 RAII guard 包裹（codex 发现）
 - [ ] **[中]** 超时默认值不一致（代码 `default_timeout()` 返回 600，文档和 toml 写 900）
+- [ ] **[中]** `RoundReReview` prompt 写死"代码已被修改"，但 `--no-apply`/取消/失败时代码未改（codex 发现）
 - [ ] **[中]** `last_a_response`/`last_b_response` 应用 `Option<String>` 替代空字符串 + `#[allow(unused_assignments)]`
 - [ ] **[中]** Windows/非 Windows 分支代码重复（agent.rs）→ 先构建 Command 再统一配置
 - [ ] **[中]** 日志初始化失败时 Dashboard 模式完全没有 tracing subscriber
