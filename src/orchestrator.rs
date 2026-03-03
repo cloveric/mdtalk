@@ -47,24 +47,62 @@ async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Resu
     Ok(())
 }
 
-/// Stage all changes and commit. Silently succeeds if nothing to commit.
-async fn git_commit_all(project_path: &Path, message: &str) -> Result<()> {
-    TokioCommand::new("git")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitCommitOutcome {
+    Committed,
+    NothingToCommit,
+}
+
+/// Stage all changes and commit.
+/// Returns whether a commit was created.
+async fn git_commit_all(project_path: &Path, message: &str) -> Result<GitCommitOutcome> {
+    let add_output = TokioCommand::new("git")
         .args(["add", "-A"])
         .current_dir(project_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .output()
         .await?;
-    // Commit — may fail if nothing to commit, that's fine
-    let _ = TokioCommand::new("git")
-        .args(["commit", "-m", message])
+    if !add_output.status.success() {
+        anyhow::bail!(
+            "git add -A failed: {}",
+            String::from_utf8_lossy(&add_output.stderr).trim()
+        );
+    }
+
+    let staged_diff = TokioCommand::new("git")
+        .args(["diff", "--cached", "--quiet"])
         .current_dir(project_path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .output()
-        .await;
-    Ok(())
+        .await?;
+    match staged_diff.status.code() {
+        Some(0) => return Ok(GitCommitOutcome::NothingToCommit),
+        Some(1) => {}
+        _ => {
+            anyhow::bail!(
+                "git diff --cached --quiet failed: {}",
+                String::from_utf8_lossy(&staged_diff.stderr).trim()
+            );
+        }
+    }
+
+    let commit_output = TokioCommand::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+        let details = if stderr.is_empty() { stdout } else { stderr };
+        anyhow::bail!("git commit -m failed: {details}");
+    }
+
+    Ok(GitCommitOutcome::Committed)
 }
 
 /// Checkout target branch and merge the given branch into it.
@@ -676,15 +714,25 @@ pub async fn run(
                                 } else {
                                     format!("分支模式: 创建分支失败: {e}")
                                 });
+                                state.update_preview(&conversation);
+                                let _ = state_tx.send(state.clone());
+                                return Err(anyhow::anyhow!(
+                                    "分支模式: 创建审查分支失败，已停止修改: {e}"
+                                ));
                             }
                         }
                     }
                     None => {
                         state.log(if state.is_en() {
-                            "Branch mode: not a git repo, skipping"
+                            "Branch mode: not a git repo, stopping apply"
                         } else {
-                            "分支模式: 非 git 仓库，已跳过"
+                            "分支模式: 非 git 仓库，停止修改"
                         });
+                        state.update_preview(&conversation);
+                        let _ = state_tx.send(state.clone());
+                        return Err(anyhow::anyhow!(
+                            "分支模式: 当前目录不是 git 仓库，无法创建隔离分支"
+                        ));
                     }
                 }
                 let _ = state_tx.send(state.clone());
@@ -778,18 +826,28 @@ pub async fn run(
     // Branch mode: commit changes and wait for merge decision
     if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
         // Auto-commit all changes on the review branch
-        if let Err(e) = git_commit_all(&project_path, &format!("mdtalk: review changes on {rb}")).await {
-            state.log(&if state.is_en() {
-                format!("Failed to commit changes: {e}")
-            } else {
-                format!("提交更改失败: {e}")
-            });
-        } else {
-            state.log(&if state.is_en() {
-                format!("Changes committed on branch {rb}")
-            } else {
-                format!("更改已提交到分支 {rb}")
-            });
+        match git_commit_all(&project_path, &format!("mdtalk: review changes on {rb}")).await {
+            Ok(GitCommitOutcome::Committed) => {
+                state.log(&if state.is_en() {
+                    format!("Changes committed on branch {rb}")
+                } else {
+                    format!("更改已提交到分支 {rb}")
+                });
+            }
+            Ok(GitCommitOutcome::NothingToCommit) => {
+                state.log(if state.is_en() {
+                    "No file changes to commit on review branch"
+                } else {
+                    "审查分支无可提交的文件变更"
+                });
+            }
+            Err(e) => {
+                state.log(&if state.is_en() {
+                    format!("Failed to commit changes: {e}")
+                } else {
+                    format!("提交更改失败: {e}")
+                });
+            }
         }
 
         // Enter WaitingForMerge phase
@@ -864,9 +922,12 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        ExchangeKind, OrchestratorState, classify_exchange, run, should_append_round_header,
+        ExchangeKind, OrchestratorState, classify_exchange, git_commit_all, run,
+        should_append_round_header,
     };
-    use crate::config::{AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig};
+    use crate::config::{
+        AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig, StartConfig,
+    };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -927,6 +988,19 @@ mod tests {
             dashboard: DashboardConfig {
                 refresh_rate_ms: 100,
             },
+        }
+    }
+
+    fn start_config(agent_a_cmd: String, agent_b_cmd: String, branch_mode: bool) -> StartConfig {
+        StartConfig {
+            agent_a_command: agent_a_cmd,
+            agent_b_command: agent_b_cmd,
+            max_rounds: 1,
+            max_exchanges: 1,
+            auto_apply: true,
+            apply_level: 1,
+            language: "zh".to_string(),
+            branch_mode,
         }
     }
 
@@ -1014,6 +1088,40 @@ mod tests {
 
         let result = run(cfg, state_tx, false, 1, None, None).await;
         assert!(result.is_err(), "Apply-phase failure should return Err");
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn branch_mode_errors_when_review_branch_cannot_be_created() {
+        let project_dir = unique_test_dir("branch-mode-non-git");
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_ok_cmd.clone());
+        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        start_tx
+            .send(start_config(a_ok_cmd, b_ok_cmd, true))
+            .expect("failed to send start config");
+
+        let result = run(cfg, state_tx, false, 1, Some(start_rx), None).await;
+        assert!(
+            result.is_err(),
+            "Branch mode must fail fast when review branch cannot be created"
+        );
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn git_commit_all_returns_error_outside_git_repo() {
+        let project_dir = unique_test_dir("git-commit-non-git");
+        fs::write(project_dir.join("file.txt"), "content").expect("failed to write test file");
+
+        let result = git_commit_all(&project_dir, "test commit").await;
+        assert!(
+            result.is_err(),
+            "git_commit_all should fail when git add/commit fails"
+        );
+
         let _ = fs::remove_dir_all(project_dir);
     }
 }

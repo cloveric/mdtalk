@@ -7,7 +7,9 @@ pub struct ConsensusResult {
 
 /// Negation patterns that invalidate a keyword match.
 const NEGATION_PREFIXES: &[&str] = &[
+    "no ",
     "not ",
+    "not in ",
     "don't ",
     "doesn't ",
     "do not ",
@@ -241,6 +243,24 @@ mod tests {
         let r = check_consensus(
             "我同意前三条建议，但不同意第四条。",
             "我同意所有改进建议。",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn no_consensus_phrase_is_not_treated_as_consensus() {
+        let kws = vec!["consensus".into()];
+        let r = check_consensus("No consensus yet.", "No consensus reached.", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn not_in_agreement_is_not_treated_as_consensus() {
+        let kws = vec!["agreement".into()];
+        let r = check_consensus(
+            "We are not in agreement on this item.",
+            "Still not in agreement overall.",
             &kws,
         );
         assert!(!r.reached);
