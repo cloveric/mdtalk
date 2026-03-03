@@ -36,10 +36,11 @@ impl AgentRunner {
                 prompt.to_string(),
                 "--output-format".to_string(),
                 "text".to_string(),
+                "--dangerously-skip-permissions".to_string(),
             ],
             "codex" => vec![
                 "exec".to_string(),
-                "--full-auto".to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
                 prompt.to_string(),
             ],
             // Generic fallback: just pass prompt as a single arg
@@ -202,13 +203,18 @@ mod tests {
     }
 
     #[test]
-    fn codex_uses_full_auto_mode() {
+    fn codex_uses_dangerous_bypass_mode() {
         let args = runner("codex").build_args("hello");
-        assert!(args.iter().any(|arg| arg == "--full-auto"));
-        assert!(
-            !args
-                .iter()
-                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
-        );
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox"));
+    }
+
+    #[test]
+    fn claude_uses_dangerous_skip_permissions() {
+        let args = runner("claude").build_args("hello");
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--dangerously-skip-permissions"));
     }
 }
