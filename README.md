@@ -2,11 +2,13 @@
 
 <br>
 
-<h1>🗣️ MDTalk</h1>
+<img src="assets/banner.png" alt="MDTalk" width="720">
+
+<br>
 
 <h3>One AI says <em>"looks great!"</em> — Two AIs find <strong>18 real bugs</strong> and fix them.</h3>
 
-<p><sub>The adversarial code review system that catches what single-agent review can't.</sub></p>
+<p>The adversarial code review system that catches what single-agent review can't.</p>
 
 <p>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Built_with-Rust-ef4a00?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"></a>&nbsp;
@@ -23,11 +25,6 @@
   <a href="#中文说明">中文</a>
 </p>
 
-<br>
-
-<img src="assets/banner.png" alt="MDTalk — Two AIs debate your code" width="720">
-
-<br>
 <br>
 
 </div>
