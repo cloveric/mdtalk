@@ -114,7 +114,8 @@ MDTalk uses a **two-layer loop**:
 
 **Prerequisites:** [Rust](https://rustup.rs/) 1.75+ and at least one AI CLI — [Claude Code](https://claude.ai/download), [Codex](https://github.com/openai/codex), or any prompt-accepting CLI.
 
-> MDTalk now requires explicit project input: use `--project <path>` or `--config <path>`.
+> Use `--project <path>` or `--config <path>`.  
+> When using `--project`, MDTalk auto-loads `<project>/mdtalk.toml` if it exists.
 
 ```bash
 git clone https://github.com/cloveric/mdtalk && cd mdtalk
@@ -137,7 +138,7 @@ mdtalk --project . --apply-level 3
 # Discuss only, don't touch code
 mdtalk --project . --no-apply
 
-# Load from a config file explicitly
+# Load from a specific config file path
 mdtalk --config ./mdtalk.toml
 
 # Preview the TUI layout
@@ -368,7 +369,8 @@ mdtalk --config ./mdtalk.toml                    # 显式加载配置文件
 mdtalk --demo                                    # 预览 TUI 布局
 ```
 
-> 现在必须显式传入 `--project` 或 `--config`，不再隐式读取默认配置。
+> 现在需显式传入 `--project` 或 `--config`。  
+> 使用 `--project` 时，会自动读取该项目目录下的 `mdtalk.toml`（若存在）。
 
 ### ⚙️ 参数说明（新增）
 

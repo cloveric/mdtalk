@@ -70,11 +70,11 @@ async fn main() -> Result<()> {
 
     // Load config base:
     // - if --config is provided: load it explicitly
-    // - else require --project and start from defaults
+    // - else require --project and auto-load <project>/mdtalk.toml when present
     let mut cfg = if let Some(config_path) = &cli.config {
         config::MdtalkConfig::load(config_path)?
     } else if let Some(project_path) = &cli.project {
-        config::MdtalkConfig::from_cli(project_path.clone(), None, None, None, None)
+        config::MdtalkConfig::from_project_with_optional_config(project_path.clone())?
     } else {
         anyhow::bail!("未指定项目。请使用 --project <路径> 或 --config <路径>。");
     };

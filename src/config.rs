@@ -151,6 +151,23 @@ impl MdtalkConfig {
         Ok(config)
     }
 
+    /// Build config from project path:
+    /// - if `<project>/mdtalk.toml` exists, load it
+    /// - otherwise fall back to defaults
+    ///
+    /// In both cases, `project.path` is forced to the CLI project path.
+    pub fn from_project_with_optional_config(project_path: PathBuf) -> Result<Self> {
+        let config_path = project_path.join("mdtalk.toml");
+        let mut cfg = if config_path.is_file() {
+            Self::load(&config_path)?
+        } else {
+            Self::from_cli(project_path.clone(), None, None, None, None)
+        };
+        cfg.project.path = project_path;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
     /// Apply CLI overrides on top of the current config.
     /// Priority: defaults/file < CLI.
     pub fn apply_cli_overrides(
@@ -250,6 +267,18 @@ impl MdtalkConfig {
 mod tests {
     use super::MdtalkConfig;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("mdtalk-config-{name}-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("failed to create test dir");
+        dir
+    }
 
     #[test]
     fn cli_overrides_loaded_config_values() {
@@ -298,5 +327,54 @@ mod tests {
             result.is_err(),
             "validation should reject agent_b timeout of 0 seconds"
         );
+    }
+
+    #[test]
+    fn project_loader_prefers_local_mdtalk_toml() {
+        let dir = unique_test_dir("load-local-toml");
+        let toml = r#"
+[project]
+path = "."
+
+[agent_a]
+name = "claude"
+command = "claude"
+timeout_secs = 901
+
+[agent_b]
+name = "codex"
+command = "codex"
+timeout_secs = 902
+
+[review]
+max_rounds = 2
+max_exchanges = 3
+output_file = "conversation.md"
+consensus_keywords = ["agree"]
+"#;
+        std::fs::write(dir.join("mdtalk.toml"), toml).expect("failed to write mdtalk.toml");
+
+        let cfg = MdtalkConfig::from_project_with_optional_config(dir.clone())
+            .expect("project loader should read local mdtalk.toml");
+
+        assert_eq!(cfg.project.path, dir);
+        assert_eq!(cfg.agent_a.timeout_secs, 901);
+        assert_eq!(cfg.agent_b.timeout_secs, 902);
+        assert_eq!(cfg.review.max_rounds, 2);
+        assert_eq!(cfg.review.max_exchanges, 3);
+    }
+
+    #[test]
+    fn project_loader_falls_back_to_defaults_without_local_toml() {
+        let dir = unique_test_dir("load-defaults");
+
+        let cfg = MdtalkConfig::from_project_with_optional_config(dir.clone())
+            .expect("project loader should fall back to defaults");
+
+        assert_eq!(cfg.project.path, dir);
+        assert_eq!(cfg.agent_a.command, "claude");
+        assert_eq!(cfg.agent_b.command, "codex");
+        assert_eq!(cfg.agent_a.timeout_secs, 600);
+        assert_eq!(cfg.agent_b.timeout_secs, 600);
     }
 }
