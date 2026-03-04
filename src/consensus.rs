@@ -27,6 +27,16 @@ const ENGLISH_NEGATION_TOKENS: &[&str] = &[
 ];
 
 const CHINESE_NEGATION_TOKENS: &[&str] = &["不", "没有", "未", "无法"];
+const ENGLISH_TURNING_TOKENS: &[&str] = &[
+    "but",
+    "however",
+    "although",
+    "though",
+    "yet",
+    "nevertheless",
+    "nonetheless",
+];
+const CHINESE_TURNING_TOKENS: &[&str] = &["但", "但是", "不过", "然而", "可是"];
 
 fn is_clause_boundary(ch: char) -> bool {
     matches!(
@@ -65,9 +75,36 @@ fn is_negated_context(preceding: &str) -> bool {
     has_recent_english_negation(preceding) || has_recent_chinese_negation(preceding)
 }
 
-/// Check if a keyword appears in the text in an affirmative context
-/// (i.e., not preceded by a negation).
-fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
+fn has_english_turning_word(text: &str) -> bool {
+    text.split(|ch: char| !(ch.is_ascii_alphabetic() || ch == '\''))
+        .filter(|token| !token.is_empty())
+        .any(|token| ENGLISH_TURNING_TOKENS.contains(&token))
+}
+
+fn has_chinese_turning_word(text: &str) -> bool {
+    CHINESE_TURNING_TOKENS
+        .iter()
+        .any(|token| text.contains(token))
+}
+
+fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) -> bool {
+    let mut context_end = (keyword_end + 120).min(text_lower.len());
+    while context_end > keyword_end && !text_lower.is_char_boundary(context_end) {
+        context_end -= 1;
+    }
+    let following = &text_lower[keyword_end..context_end];
+    let clause_end = following
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '.' | '!' | '?' | ';' | '\n' | '。' | '！' | '？' | '；'))
+        .map_or(following.len(), |(idx, _)| idx);
+    let local_following = following[..clause_end].trim_start();
+    has_english_turning_word(local_following) || has_chinese_turning_word(local_following)
+}
+
+/// Check if a keyword appears in the text in an affirmative context.
+/// When `require_unambiguous` is true, affirmative keywords followed by
+/// turning words (e.g. but/however/但是) are treated as partial, not full consensus.
+fn has_affirmative_keyword(text: &str, keyword: &str, require_unambiguous: bool) -> bool {
     let kw_lower = keyword.to_lowercase();
     let text_lower = text.to_lowercase();
     let requires_word_boundary = kw_lower.chars().any(|ch| ch.is_ascii_alphabetic())
@@ -107,7 +144,10 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
 
         let negated = is_negated_context(local_preceding);
 
-        if !negated {
+        let has_turning =
+            require_unambiguous && has_turning_word_in_following_clause(&text_lower, abs_end);
+
+        if !negated && !has_turning {
             return true;
         }
 
@@ -120,17 +160,17 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
 /// Check whether an agent's response shows unambiguous consensus.
 /// Returns false if the response contains mixed signals (both affirmative
 /// and negated consensus keywords).
-fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
+fn agent_shows_consensus(response: &str, keywords: &[String], require_unambiguous: bool) -> bool {
     keywords
         .iter()
-        .any(|kw| has_affirmative_keyword(response, kw))
+        .any(|kw| has_affirmative_keyword(response, kw, require_unambiguous))
 }
 
 /// Check consensus based on Agent B's response only, accepting full OR partial agreement.
 /// Used when: (a) max_exchanges == 1 (only one shot), or (b) it's the last exchange
 /// (exhausted all exchanges — apply whatever was agreed).
 pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
-    if agent_shows_consensus(agent_b_response, keywords) {
+    if agent_shows_consensus(agent_b_response, keywords, false) {
         ConsensusResult {
             reached: true,
             summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
@@ -156,7 +196,7 @@ pub fn check_b_full_only(agent_b_response: &str, keywords: &[String]) -> Consens
         .cloned()
         .collect();
 
-    if agent_shows_consensus(agent_b_response, &full_keywords) {
+    if agent_shows_consensus(agent_b_response, &full_keywords, true) {
         ConsensusResult {
             reached: true,
             summary: "Agent B 完全认可审查意见。".to_string(),
@@ -176,8 +216,8 @@ pub fn check_consensus(
     agent_b_response: &str,
     keywords: &[String],
 ) -> ConsensusResult {
-    let a_consensus = agent_shows_consensus(agent_a_response, keywords);
-    let b_consensus = agent_shows_consensus(agent_b_response, keywords);
+    let a_consensus = agent_shows_consensus(agent_a_response, keywords, false);
+    let b_consensus = agent_shows_consensus(agent_b_response, keywords, false);
 
     if a_consensus && b_consensus {
         return ConsensusResult {
@@ -309,6 +349,23 @@ mod tests {
         // B only says things are NOT valid — no affirmative keyword
         let kws = vec!["成立".into()];
         let r = check_b_only("以上问题均不成立，全部驳回。", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_turning_word_after_affirmative_english() {
+        let kws = vec!["agree".into(), "partially agree".into()];
+        let r = check_b_full_only(
+            "I agree with points 1-3, however point 4 is still wrong and needs changes.",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_turning_word_after_affirmative_chinese() {
+        let kws = vec!["同意".into(), "部分同意".into()];
+        let r = check_b_full_only("我同意前三条建议，但是第四条我不同意。", &kws);
         assert!(!r.reached);
     }
 

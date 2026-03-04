@@ -115,3 +115,50 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 20:02:25
+
+已根据 `conversation.md` 的“已达成共识”项完成修复，并直接改了源码。
+
+**已修复项**
+1. 共识判定增加“转折词”识别（仅在“完全同意”判定时收紧，部分同意仍可通过）  
+[consensus.rs:90](C:/Users/hangw/mdtalk/src/consensus.rs#L90) [consensus.rs:188](C:/Users/hangw/mdtalk/src/consensus.rs#L188)  
+并补了回归测试：  
+[consensus.rs:356](C:/Users/hangw/mdtalk/src/consensus.rs#L356)
+
+2. 修复 `enable_raw_mode()` 后初始化失败时的终端恢复缺口  
+[dashboard/mod.rs:52](C:/Users/hangw/mdtalk/src/dashboard/mod.rs#L52)
+
+3. Agent B prompt 按 exchange 阶段区分，FollowUp 不再使用“逐条验证”模板  
+[orchestrator.rs:372](C:/Users/hangw/mdtalk/src/orchestrator.rs#L372) [orchestrator.rs:876](C:/Users/hangw/mdtalk/src/orchestrator.rs#L876)  
+并补了测试：  
+[orchestrator.rs:1536](C:/Users/hangw/mdtalk/src/orchestrator.rs#L1536)
+
+4. 合并 Windows/Unix 启动参数拼装重复逻辑  
+[agent.rs:78](C:/Users/hangw/mdtalk/src/agent.rs#L78)
+
+5. 修复 changelog header 写入 TOCTOU（改为 `create_new` 原子首建）  
+[conversation.rs:118](C:/Users/hangw/mdtalk/src/conversation.rs#L118) [conversation.rs:127](C:/Users/hangw/mdtalk/src/conversation.rs#L127)
+
+6. 日志面板可见行去硬编码，改为共享常量  
+[dashboard/mod.rs:22](C:/Users/hangw/mdtalk/src/dashboard/mod.rs#L22) [dashboard/app.rs:225](C:/Users/hangw/mdtalk/src/dashboard/app.rs#L225) [dashboard/ui.rs:22](C:/Users/hangw/mdtalk/src/dashboard/ui.rs#L22)
+
+7. Markdown 标题高亮改为仅匹配标准格式（`### ` / `#### `）  
+[dashboard/ui.rs:348](C:/Users/hangw/mdtalk/src/dashboard/ui.rs#L348)
+
+8. `Conversation` 移除 `std::sync::Mutex` 文件句柄状态，改为按次 append 打开写入  
+[conversation.rs:11](C:/Users/hangw/mdtalk/src/conversation.rs#L11) [conversation.rs:24](C:/Users/hangw/mdtalk/src/conversation.rs#L24)
+
+9. 三处重复测试临时目录工具已抽到共享模块  
+[test_utils.rs:1](C:/Users/hangw/mdtalk/src/test_utils.rs#L1) [main.rs:8](C:/Users/hangw/mdtalk/src/main.rs#L8)  
+[config.rs:369](C:/Users/hangw/mdtalk/src/config.rs#L369) [conversation.rs:173](C:/Users/hangw/mdtalk/src/conversation.rs#L173) [orchestrator.rs:1551](C:/Users/hangw/mdtalk/src/orchestrator.rs#L1551)
+
+**验证**
+1. `cargo fmt`
+2. `cargo test`  
+结果：`45 passed, 0 failed`。
+
+未改动项与共识一致：#2（当前版本不成立）、#5（已撤回）、#12（已修复无需再改）。
+
+
+---
+

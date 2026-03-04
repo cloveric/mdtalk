@@ -4,6 +4,8 @@ mod consensus;
 mod conversation;
 mod dashboard;
 mod orchestrator;
+#[cfg(test)]
+mod test_utils;
 
 use std::path::PathBuf;
 use std::time::Duration;

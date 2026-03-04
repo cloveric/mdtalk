@@ -310,36 +310,10 @@ impl MdtalkConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::MdtalkConfig;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestTempDir {
-        path: PathBuf,
-    }
-
-    impl TestTempDir {
-        fn new(name: &str) -> Self {
-            let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("mdtalk-config-{name}-{}-{id}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).expect("failed to create test dir");
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
+    use crate::test_utils::TestTempDir;
 
     #[test]
     fn cli_overrides_loaded_config_values() {
@@ -392,7 +366,7 @@ mod tests {
 
     #[test]
     fn project_loader_prefers_local_mdtalk_toml() {
-        let dir = TestTempDir::new("load-local-toml");
+        let dir = TestTempDir::new("config", "load-local-toml");
         let toml = r#"
 [project]
 path = "."
@@ -427,7 +401,7 @@ consensus_keywords = ["agree"]
 
     #[test]
     fn project_loader_falls_back_to_defaults_without_local_toml() {
-        let dir = TestTempDir::new("load-defaults");
+        let dir = TestTempDir::new("config", "load-defaults");
 
         let cfg = MdtalkConfig::from_project_with_optional_config(dir.path().to_path_buf())
             .expect("project loader should fall back to defaults");

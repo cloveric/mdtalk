@@ -1,5 +1,6 @@
 use tokio::sync::{mpsc, oneshot};
 
+use super::LOG_VISIBLE_LINES;
 use crate::config::{AGENT_PRESETS, StartConfig};
 use crate::orchestrator::{OrchestratorCommand, OrchestratorState};
 
@@ -219,10 +220,10 @@ impl DashboardApp {
     pub fn update_state(&mut self, new_state: OrchestratorState) {
         self.state = new_state;
         self.language = self.state.language.clone();
-        // Auto-scroll logs to bottom (log panel is Length(6) - 2 borders = 4 visible lines)
+        // Auto-scroll logs to bottom.
         let log_len = self.state.logs.len() as u16;
-        if log_len > 4 {
-            self.log_scroll_offset = log_len - 4;
+        if log_len > LOG_VISIBLE_LINES {
+            self.log_scroll_offset = log_len - LOG_VISIBLE_LINES;
         }
         self.scroll_offset = self
             .scroll_offset

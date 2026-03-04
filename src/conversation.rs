@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -11,7 +11,6 @@ use chrono::Local;
 pub struct Conversation {
     path: PathBuf,
     project_name: String,
-    append_file: Mutex<Option<File>>,
 }
 
 impl Conversation {
@@ -19,25 +18,15 @@ impl Conversation {
         Self {
             path: output_dir.join(filename),
             project_name: project_name.to_string(),
-            append_file: Mutex::new(None),
         }
     }
 
     fn append_text(&self, text: &str) -> Result<()> {
-        let mut guard = self
-            .append_file
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Conversation append lock poisoned"))?;
-        if guard.is_none() {
-            let file = OpenOptions::new()
-                .append(true)
-                .open(&self.path)
-                .with_context(|| "Failed to open conversation file for append")?;
-            *guard = Some(file);
-        }
-        let file = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Conversation append file was not initialized"))?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .with_context(|| "Failed to open conversation file for append")?;
         file.write_all(text.as_bytes())
             .with_context(|| "Failed to append to conversation file")?;
         file.flush()
@@ -58,12 +47,6 @@ impl Conversation {
         };
         std::fs::write(&self.path, &header)
             .with_context(|| format!("Failed to create conversation file {:?}", self.path))?;
-
-        let mut guard = self
-            .append_file
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Conversation append lock poisoned"))?;
-        *guard = None;
 
         Ok(())
     }
@@ -139,15 +122,24 @@ pub fn append_changelog_with_language(
     en: bool,
 ) -> Result<()> {
     let path = project_dir.join("review_changelog.md");
-    let needs_header = !path.exists();
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("Failed to open changelog {:?}", path))?;
+    let mut wrote_header = false;
+    let mut file = match OpenOptions::new().create_new(true).append(true).open(&path) {
+        Ok(file) => {
+            wrote_header = true;
+            file
+        }
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("Failed to open changelog {:?}", path))?,
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to create changelog {:?}", path));
+        }
+    };
 
-    if needs_header {
+    if wrote_header {
         if en {
             write!(file, "# MDTalk Code Change Log\n\n")?;
         } else {
@@ -173,41 +165,12 @@ pub fn append_changelog_with_language(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use super::Conversation;
-
-    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestTempDir {
-        path: PathBuf,
-    }
-
-    impl TestTempDir {
-        fn new(name: &str) -> Self {
-            let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("mdtalk-conv-{name}-{}-{id}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).expect("failed to create test dir");
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
+    use crate::test_utils::TestTempDir;
 
     #[test]
     fn read_tail_lines_returns_latest_lines_only() {
-        let dir = TestTempDir::new("tail-lines");
+        let dir = TestTempDir::new("conversation", "tail-lines");
         let conv = Conversation::new(dir.path(), "conversation.md", "test");
         conv.create_with_language(false)
             .expect("failed to create conversation file");
@@ -227,7 +190,7 @@ mod tests {
 
     #[test]
     fn english_headers_are_written_when_localized() {
-        let dir = TestTempDir::new("english-headers");
+        let dir = TestTempDir::new("conversation", "english-headers");
         let conv = Conversation::new(dir.path(), "conversation.md", "test-project");
         conv.create_with_language(true)
             .expect("failed to create english conversation file");

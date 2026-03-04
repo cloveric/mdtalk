@@ -75,17 +75,15 @@ impl AgentRunner {
 
         let start = Instant::now();
 
-        #[cfg(windows)]
-        let (command_program, command_args) = {
+        let (command_program, command_args) = if cfg!(windows) {
             // On Windows, CLI tools installed via npm are often .cmd scripts that
             // are more reliable when launched through cmd /C.
             let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
-            full_args.extend(args.clone());
+            full_args.extend(args);
             ("cmd".to_string(), full_args)
+        } else {
+            (self.command_program.clone(), args)
         };
-
-        #[cfg(not(windows))]
-        let (command_program, command_args) = (self.command_program.clone(), args.clone());
 
         let mut cmd = Command::new(&command_program);
         cmd.kill_on_drop(true)

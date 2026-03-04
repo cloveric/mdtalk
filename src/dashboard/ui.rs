@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::app::DashboardApp;
+use super::{LOG_AREA_HEIGHT, app::DashboardApp};
 use crate::orchestrator::Phase;
 
 pub fn draw(f: &mut Frame, app: &DashboardApp) {
@@ -17,9 +17,9 @@ pub fn draw(f: &mut Frame, app: &DashboardApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4), // Status bar
-            Constraint::Min(10),   // Content area
-            Constraint::Length(6), // Log area
+            Constraint::Length(4),               // Status bar
+            Constraint::Min(10),                 // Content area
+            Constraint::Length(LOG_AREA_HEIGHT), // Log area
         ])
         .split(f.area());
 
@@ -345,12 +345,12 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         .skip(app.scroll_offset as usize)
         .map(|line| {
             // Match from longest prefix to shortest to avoid #### being caught by ###
-            if line.starts_with("####") {
+            if line.starts_with("#### ") {
                 Line::from(Span::styled(
                     line.to_string(),
                     Style::default().fg(Color::Yellow),
                 ))
-            } else if line.starts_with("###") {
+            } else if line.starts_with("### ") {
                 Line::from(Span::styled(
                     line.to_string(),
                     Style::default()

@@ -19,6 +19,9 @@ use self::app::DashboardApp;
 use crate::config::StartConfig;
 use crate::orchestrator::{OrchestratorCommand, OrchestratorState, Phase};
 
+pub const LOG_AREA_HEIGHT: u16 = 6;
+pub const LOG_VISIBLE_LINES: u16 = LOG_AREA_HEIGHT.saturating_sub(2);
+
 /// What the dashboard returns when it exits.
 pub enum DashboardExit {
     Quit,
@@ -48,9 +51,20 @@ pub fn run(
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(e) => {
+            let mut stdout = io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+            let _ = disable_raw_mode();
+            return Err(e.into());
+        }
+    };
 
     let result = run_dashboard_loop(
         &mut terminal,

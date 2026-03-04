@@ -369,38 +369,61 @@ You MUST end your response with one of these exact conclusion lines:\n\
     }
 }
 
-fn build_agent_b_prompt(conv_filename: &str, en: bool) -> String {
+fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bool) -> String {
     if en {
-        return format!(
-            "You are an independent code review expert. Verify each finding recorded in '{conv_filename}'.\n\n\
-Steps:\n\
-1. Read '{conv_filename}' and list all findings from the other reviewer\n\
-2. Open the related source files and verify each finding against actual code\n\
-3. Output your complete review response directly in this format:\n\
-   - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
-   - Add any missed issues\n\
-   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
-     Full agreement: write exactly → CONCLUSION: I agree\n\
-     Partial agreement: write exactly → CONCLUSION: partially agree\n\
-     Disagree: write exactly → CONCLUSION: I disagree\n\n\
-Important: output the full review content directly; do not only report which files you read."
-        );
+        return match exchange_kind {
+            ExchangeKind::InitialReview | ExchangeKind::RoundReReview => format!(
+                "You are an independent code review expert. Verify each finding recorded in '{conv_filename}'.\n\n\
+                Steps:\n\
+                1. Read '{conv_filename}' and list all findings from the other reviewer\n\
+                2. Open the related source files and verify each finding against actual code\n\
+                3. Output your complete review response directly in this format:\n\
+                   - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
+                   - Add any missed issues\n\
+                   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
+                     Full agreement: write exactly → CONCLUSION: I agree\n\
+                     Partial agreement: write exactly → CONCLUSION: partially agree\n\
+                     Disagree: write exactly → CONCLUSION: I disagree\n\n\
+                Important: output the full review content directly; do not only report which files you read."
+            ),
+            ExchangeKind::FollowUp => format!(
+                "You are participating in a multi-agent code review workflow. \
+                First read the full conversation history in {conv_filename}.\n\n\
+                Then continue the discussion based on Agent A's latest response. \
+                State whether you agree and provide further thoughts.\n\n\
+                You MUST end your response with one of these exact conclusion lines:\n\
+                  If you fully agree: CONCLUSION: I agree\n\
+                  If you partially agree: CONCLUSION: partially agree\n\
+                  If you disagree: CONCLUSION: I disagree"
+            ),
+        };
     }
 
-    format!(
-        "你是一位独立的代码审查专家。你的任务是对 '{conv_filename}' 中记录的代码审查意见进行逐条验证。\n\n\
-具体步骤：\n\
-1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
-2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
-3. 直接输出你的完整审查回应，格式如下：\n\
-   - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
-   - 补充任何审查者遗漏的新问题\n\
-   - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
-     完全认可：写 → 结论：同意\n\
-     部分认可：写 → 结论：部分同意\n\
-     存在重大分歧：写 → 结论：不同意\n\n\
-重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
-    )
+    match exchange_kind {
+        ExchangeKind::InitialReview | ExchangeKind::RoundReReview => format!(
+            "你是一位独立的代码审查专家。你的任务是对 '{conv_filename}' 中记录的代码审查意见进行逐条验证。\n\n\
+            具体步骤：\n\
+            1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
+            2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
+            3. 直接输出你的完整审查回应，格式如下：\n\
+               - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
+               - 补充任何审查者遗漏的新问题\n\
+               - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
+                 完全认可：写 → 结论：同意\n\
+                 部分认可：写 → 结论：部分同意\n\
+                 存在重大分歧：写 → 结论：不同意\n\n\
+            重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
+        ),
+        ExchangeKind::FollowUp => format!(
+            "你正在参与一个多 agent 代码审查流程。\
+            请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
+            然后根据 Agent A 的最新反馈继续讨论，表达你的看法。\n\n\
+            你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
+              完全同意：结论：同意\n\
+              部分同意：结论：部分同意\n\
+              存在分歧：结论：不同意"
+        ),
+    }
 }
 
 fn build_apply_instruction(apply_level: u32, en: bool) -> &'static str {
@@ -850,7 +873,7 @@ pub async fn run(
             });
             let _ = state_tx.send(state.clone());
 
-            let b_prompt = build_agent_b_prompt(&conv_filename, state.is_en());
+            let b_prompt = build_agent_b_prompt(exchange_kind, &conv_filename, state.is_en());
 
             let b_label = if state.is_en() {
                 format!(
@@ -1315,7 +1338,6 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command as StdCommand;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use tokio::sync::watch;
 
@@ -1327,34 +1349,7 @@ mod tests {
     use crate::config::{
         AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig, StartConfig,
     };
-
-    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDirCleanup {
-        path: PathBuf,
-    }
-
-    impl TestDirCleanup {
-        fn new(path: &Path) -> Self {
-            Self {
-                path: path.to_path_buf(),
-            }
-        }
-    }
-
-    impl Drop for TestDirCleanup {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    fn unique_test_dir(name: &str) -> PathBuf {
-        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("mdtalk-{name}-{}-{id}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("failed to create test dir");
-        dir
-    }
+    use crate::test_utils::TestTempDir;
 
     fn git_must_succeed(dir: &Path, args: &[&str]) {
         let output = StdCommand::new("git")
@@ -1532,9 +1527,16 @@ mod tests {
 
     #[test]
     fn english_agent_b_prompt_is_localized() {
-        let prompt = build_agent_b_prompt("conversation.md", true);
+        let prompt = build_agent_b_prompt(ExchangeKind::InitialReview, "conversation.md", true);
         assert!(prompt.contains("You are an independent code review expert"));
         assert!(!prompt.contains("你是一位独立的代码审查专家"));
+    }
+
+    #[test]
+    fn followup_agent_b_prompt_mentions_discussion_flow() {
+        let prompt = build_agent_b_prompt(ExchangeKind::FollowUp, "conversation.md", true);
+        assert!(prompt.contains("continue the discussion"));
+        assert!(!prompt.contains("Verify each finding"));
     }
 
     #[test]
@@ -1546,8 +1548,8 @@ mod tests {
 
     #[tokio::test]
     async fn returns_err_when_agent_a_discussion_fails() {
-        let project_dir = unique_test_dir("agent-a-fails");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "agent-a-fails");
+        let project_dir = temp_dir.path().to_path_buf();
         let fail_cmd = script_always_fail(&project_dir, "agent_a_fail");
         let ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
         let cfg = test_config(project_dir.clone(), fail_cmd, ok_cmd);
@@ -1562,8 +1564,8 @@ mod tests {
 
     #[tokio::test]
     async fn returns_err_when_apply_phase_fails() {
-        let project_dir = unique_test_dir("apply-fails");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "apply-fails");
+        let project_dir = temp_dir.path().to_path_buf();
         let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
         let b_cmd = script_fail_on_second_invocation(&project_dir, "agent_b_fail_on_second_call");
         let cfg = test_config(project_dir.clone(), a_ok_cmd, b_cmd);
@@ -1575,8 +1577,8 @@ mod tests {
 
     #[tokio::test]
     async fn branch_mode_errors_when_review_branch_cannot_be_created() {
-        let project_dir = unique_test_dir("branch-mode-non-git");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "branch-mode-non-git");
+        let project_dir = temp_dir.path().to_path_buf();
         let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
         let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
         let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_ok_cmd.clone());
@@ -1599,8 +1601,8 @@ mod tests {
 
     #[tokio::test]
     async fn branch_mode_commit_excludes_preexisting_dirty_files() {
-        let project_dir = unique_test_dir("branch-mode-dirty-filter");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "branch-mode-dirty-filter");
+        let project_dir = temp_dir.path().to_path_buf();
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1662,8 +1664,8 @@ mod tests {
 
     #[tokio::test]
     async fn branch_mode_keeps_branch_info_when_no_consensus() {
-        let project_dir = unique_test_dir("branch-mode-no-consensus");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "branch-mode-no-consensus");
+        let project_dir = temp_dir.path().to_path_buf();
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1693,8 +1695,8 @@ mod tests {
 
     #[tokio::test]
     async fn git_commit_filtered_returns_error_outside_git_repo() {
-        let project_dir = unique_test_dir("git-commit-non-git");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "git-commit-non-git");
+        let project_dir = temp_dir.path().to_path_buf();
         fs::write(project_dir.join("file.txt"), "content").expect("failed to write test file");
 
         let result = git_commit_filtered(&project_dir, "test commit", &HashSet::new()).await;
@@ -1706,8 +1708,8 @@ mod tests {
 
     #[tokio::test]
     async fn git_commit_filtered_keeps_unrelated_staged_entries() {
-        let project_dir = unique_test_dir("git-commit-keep-staged");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "git-commit-keep-staged");
+        let project_dir = temp_dir.path().to_path_buf();
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1784,8 +1786,8 @@ mod tests {
 
     #[test]
     fn state_logs_are_bounded() {
-        let project_dir = unique_test_dir("state-log-cap");
-        let _cleanup = TestDirCleanup::new(&project_dir);
+        let temp_dir = TestTempDir::new("orchestrator", "state-log-cap");
+        let project_dir = temp_dir.path().to_path_buf();
         let cfg = test_config(
             project_dir.clone(),
             "agent_a_cmd".to_string(),
