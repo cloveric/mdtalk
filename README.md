@@ -1,14 +1,13 @@
 <div align="center">
 
-# ⚔️ MDTalk (左右互博) ⚔️
-## 🚀 The Ultimate AI Code Review Gladiator Arena 🚀
-### Your AI says *"LGTM"*. MDTalk says *"PROVE IT"*.
-
-<br>
-
 <img src="assets/banner.png" alt="MDTalk" width="800">
 
 <br>
+
+<h1>MDTalk</h1>
+<h3>Autonomous Adversarial Code Review System</h3>
+
+**Your AI says *"LGTM"*. MDTalk says *"Prove it."***
 
 [![Built with Rust](https://img.shields.io/badge/Built_with-Rust-ef4a00?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=for-the-badge)](https://github.com/cloveric/mdtalk)
@@ -19,7 +18,7 @@
 
 <br>
 
-> ⚠️ **WARNING**: MDTalk is NOT your average polite AI reviewer. It is an **aggressive**, **unrelenting**, **multi-agent battleground** where AI models cross-examine each other's code to ruthlessly eliminate bugs.
+> **MDTalk** is an uncompromising, multi-agent code auditing framework. It replaces passive AI compliance with rigorous adversarial debate, ensuring mission-critical code quality through cross-examination.
 
 </div>
 
@@ -29,74 +28,71 @@
 
 ## 🇬🇧 English Documentation
 
-### 🤯 The Problem: The "LGTM" Illusion
-You just finished a 2,000-line feature. You ask your AI coding assistant to review it.  
-It replies in 3 seconds: *"Looks great to me! (LGTM)"* 🎉  
-**WRONG.**  
-Production goes down. Why? Because a single AI model is complacent, lazy, and hallucinates. The pipe deadlock, the semantic parameter bug, and the sandbox permission hole are all still there.
+### 🧨 The Illusion of "LGTM"
+You push a complex feature. You ask a single AI model to review it. In seconds, it replies: *"Looks great to me!"*
+Production breaks. Why? Single-agent AI is inherently compliant and prone to hallucination. It misses edge cases, race conditions, and semantic flaws because it lacks a verification mechanism.
 
-### 💡 The Solution: Adversarial AI Cross-Examination
-**MDTalk** pits **TWO** independent AI agents (e.g., Claude vs. Codex) against each other in a fierce debate. 
-- **Agent A** acts as the aggressive auditor, ripping your codebase apart to find flaws.
-- **Agent B** acts as the skeptical verifier, double-checking A's claims against the actual code.
-They will argue, debate, and fight until they reach a **hard consensus**. Only then will Agent B automatically apply the undisputed fixes directly to your codebase!
+### 🛡️ The Solution: Adversarial Intelligence
+**MDTalk** deploys a dual-agent architecture to completely eliminate AI complacency.
+- **The Auditor (Agent A):** Systematically analyzes your codebase, proposing vulnerabilities, anti-patterns, and logical flaws.
+- **The Verifier (Agent B):** Skeptically validates every claim made by the Auditor against the actual source code.
 
-**We ran MDTalk on its own codebase. Agent A (Claude) found 13 issues. Agent B (Codex) verified all 13, then found 5 MORE. They debated, agreed, and Agent B applied fixes to 9 files — all in ONE command.**
+They engage in an autonomous, rigorous debate. **No human intervention is required.** They cross-examine, push back, and iterate until a mathematically hard consensus is reached. Only then are verified fixes applied directly to your codebase.
+
+> *In our internal benchmarks, a single AI missed 5 critical bugs. MDTalk found all of them, debated the optimal fix, and applied the changes across 9 files autonomously.*
 
 ---
 
-### 🔥 Mind-Blowing Features
-- ⚔️ **Gladiator-Style Multi-Agent Debate:** Two AIs cross-examine each other with zero human intervention.
-- ⚡ **Zero-Touch Auto-Fix:** Once consensus is reached, the agreed-upon fixes are applied straight to your files!
-- 🔌 **Universal AI Compatibility:** Plugs into Claude Code, Codex, Gemini CLI, or *any* CLI-based AI agent.
-- 🖥️ **Stunning Live TUI Dashboard:** Watch the AI battle unfold in real-time with an incredibly sleek Ratatui-based terminal UI!
-- 🧠 **Negation-Aware Smart Consensus:** Our engine doesn't just look for "yes". It understands context, boundaries, and negations before declaring a truce.
+### ✨ Enterprise-Grade Features
+- **Adversarial Debate Engine:** Two independent AI models (e.g., Claude & Codex) auditing each other to guarantee zero hallucinations.
+- **Autonomous Resolution:** Once consensus is achieved, verified fixes are surgically applied to your source files in real-time.
+- **Universal LLM Integration:** Seamlessly connect with Claude Code, Codex, Gemini, or any standard CLI-based AI agent.
+- **Advanced Contextual Consensus:** Powered by a sophisticated parsing engine that understands negations, word boundaries, and nuanced agreement.
+- **Premium Terminal UI:** Monitor the entire auditing process through a beautifully crafted, highly responsive Ratatui dashboard.
 
 <br>
 
+### 🖥️ Work Interface
+
+Experience the auditing process in real-time with our state-of-the-art terminal dashboard.
+
 <div align="center">
-  <img src="assets/dashboard.png" alt="Dashboard Preview" width="800" style="border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.5);">
+  <img src="assets/work-interface-1.jpg" alt="MDTalk Work Interface - Configuration" width="800" style="border-radius: 8px; margin-bottom: 20px;">
+  <br><br>
+  <img src="assets/work-interface-2.jpg" alt="MDTalk Work Interface - Live Debate" width="800" style="border-radius: 8px;">
 </div>
 
 <br>
 
-### 🛠️ Work Interface
-
-<p align="center">
-  <img src="assets/work-interface-1.jpg" alt="MDTalk Work Interface 1" width="48%" style="border-radius: 8px;">
-  &nbsp;
-  <img src="assets/work-interface-2.jpg" alt="MDTalk Work Interface 2" width="48%" style="border-radius: 8px;">
-</p>
-
 ### 🚀 Quick Start
-**Prerequisites:** [Rust](https://rustup.rs/) 1.75+ and at least one AI CLI (like [Claude Code](https://claude.ai/download)).
+**Prerequisites:** [Rust](https://rustup.rs/) 1.75+ and at least one AI CLI (e.g., [Claude Code](https://claude.ai/download)).
 
 ```bash
-# 1. Install the ultimate review weapon
+# 1. Install the auditing framework
 cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
 
-# 2. Unleash the beasts on your project
+# 2. Initiate an adversarial review on your project
 mdtalk --project /path/to/your/project
 
-# 3. Want an all-Claude civil war?
+# 3. Force two Claude instances to cross-examine each other
 mdtalk --project . --agent-a claude --agent-b claude
 
-# 4. Preview the stunning TUI layout
+# 4. Preview the UI dashboard
 mdtalk --demo
 ```
 
-### ⚙️ How It Actually Works (The Architecture of Destruction)
+### ⚙️ System Architecture
 
 ```mermaid
 flowchart LR
-    A["🔍 Agent A\n(The Auditor)"] -->|Finds Vulnerabilities| C["📄 conversation.md"]
-    C --> B["✅ Agent B\n(The Verifier)"]
-    B --> D{"Consensus Reached?"}
-    D -- "NO (Debate Continues!)" --> A
-    D -- "YES (Agreement!)" --> F["🔧 Auto-Apply Fixes"]
+    A["🔍 The Auditor\n(Agent A)"] -->|Proposes Findings| C["📄 conversation.md"]
+    C --> B["✅ The Verifier\n(Agent B)"]
+    B --> D{"Consensus\nReached?"}
+    D -- "Debate Iterates" --> A
+    D -- "Verified Agreement" --> F["🔧 Auto-Apply Fixes"]
     F --> R{"Next Round?"}
-    R -- YES --> A
-    R -- NO --> Done["🎉 Codebase Secured"]
+    R -- Yes --> A
+    R -- No --> Done["🛡️ Codebase Secured"]
 ```
 
 ---
@@ -106,62 +102,63 @@ flowchart LR
 ## 🇨🇳 中文文档 (Chinese Documentation)
 
 <div align="center">
-  <h2>⚔️ 左右互博 (MDTalk) ⚔️</h2>
-  <h3>你的 AI 助理只会说“写得不错”？左右互博让两个 AI 开启无情代码审查互殴！</h3>
+  <h1>MDTalk (左右互博)</h1>
+  <h3>下一代对抗性 AI 代码审计系统</h3>
+  <p><b>拒绝虚假的“代码不错 (LGTM)”。用交叉验证重塑代码审查。</b></p>
 </div>
 
-### 🤯 痛点：被“敷衍”的代码审查
-你刚刚爆肝写完了一个 2000 行的复杂功能。你满怀期待地问你的 AI 助手：“帮我 review 一下？”  
-3秒钟后，它回复你：“代码结构清晰，逻辑严密，LGTM（看起来不错）！” 🎉  
-**大错特错！**  
-一上线就崩溃了！为什么？因为单一的 AI 模型会偷懒、会幻觉、会为了迎合你而敷衍了事。那些致命的管道死锁、参数语义错误、沙盒权限漏洞，它根本没看出来！
+### 🧨 “看似完美”的错觉
+当你向单一的 AI 助手提交数千行的复杂功能进行审查时，它往往会在几秒钟内回复：“逻辑严密，代码优秀 (LGTM)”。
+然而，潜藏在代码深处的并发死锁、参数语义错误和提权漏洞依然存在。单一 AI 模型天生具有“迎合性”和“幻觉”倾向，缺乏严谨的自我验证闭环。
 
-### 💡 革命性方案：AI 交叉火力对决
-**左右互博 (MDTalk)** 引入了**两个独立的 AI 智能体**（例如 Claude VS Codex），让它们在你的代码库里展开殊死搏斗！
-- **Agent A (挑刺狂魔)**：拿着放大镜逐行扫描你的代码，无情地指出所有潜在漏洞和坏味道。
-- **Agent B (怀疑论者)**：不盲目相信 A 的话，拿着 A 的审查报告去实际代码里逐一验证。
-它们会互相反驳、激烈辩论，直到达成**绝对的共识**。一旦它们停止争吵，Agent B 就会自动将双方都同意的修复方案**直接应用到你的代码中**！
+### 🛡️ 破局：对抗性多智能体架构
+**左右互博 (MDTalk)** 彻底颠覆了传统的 AI 审查模式。它引入了双重独立的 AI 智能体，让它们在你的代码库中进行高强度的交叉盘问：
+- **审计者 (Agent A)：** 负责深度扫描、主动出击，无情地挖掘代码库中的每一个潜在缺陷。
+- **验证者 (Agent B)：** 充当怀疑论者，结合真实的源代码，逐一验证审计者提出的每一个问题。
 
-**我们在 MDTalk 自己的源码上运行了它。Agent A (Claude) 找出了 13 个隐藏 Bug。Agent B (Codex) 不仅验证了这 13 个，还顺手又找出了 5 个新 Bug！经过一轮激烈的辩论，它们达成了共识，然后一条命令自动修复了 9 个文件。**
+它们会在没有人类干预的情况下展开激烈的技术辩论。互相反驳、不断推演，直至达成**不可辩驳的共识**。最终，验证者会自动将无争议的极致修复方案精准应用到你的代码中。
 
-> **这绝不是走过场的“复核”，这是真刀真枪的“交叉盘问”！**
+> *在我们的内部测试中，单一 AI 遗漏了 5 个核心漏洞；而 MDTalk 成功捕获了全部问题，不仅推演出了最佳修复方案，还全自动完成了 9 个文件的修改。*
 
 ---
 
-### 🔥 炸裂核心特性
-- ⚔️ **多智能体互殴 (Multi-Agent Debate)**：两个 AI 无情互撕，人类只需在一旁吃瓜看戏！
-- ⚡ **全自动手术刀式修复 (Auto-Fix)**：一旦 AI 达成共识，立刻自动修改代码，无需你手动复制粘贴！
-- 🔌 **万能插件化接入 (Universal CLI)**：完美兼容 Claude Code, Codex, Gemini CLI，或者任何你正在使用的命令行 AI 工具！
-- 🖥️ **赛博朋克风终端 UI (Live TUI)**：基于 Ratatui 打造的超华丽实时终端监控大屏，沉浸式观赏 AI 互博实况！
-- 🧠 **超强语义共识引擎 (Smart Consensus)**：精准识别“同意”、“达成共识”关键词，甚至能识别否定前缀和词边界，绝不被 AI 糊弄！
+### ✨ 核心优势
+- **对抗性验证引擎**：双模型（如 Claude 对抗 Codex）互为攻守，从根本上消除 AI 幻觉，确保审查结果的绝对可靠。
+- **零妥协自动修复**：一旦达成技术共识，系统将以“手术刀级别”的精度自动修改源码，无需人工复制粘贴。
+- **无缝接入任意大模型**：完美适配 Claude Code, Codex, Gemini CLI 或任何基于命令行的 AI 工具。
+- **高级语义共识识别**：内置智能解析器，精准识别上下文、词边界及否定语境，绝不被模棱两可的辞藻糊弄。
+- **极客级终端大屏 (TUI)**：基于 Ratatui 构建的实时终端可视化面板，以极其优雅的方式呈现 AI 间的思维碰撞。
 
-### 🚀 极速体验
-**环境要求：** [Rust](https://rustup.rs/) 1.75+ 以及至少一个 AI CLI 工具（比如 [Claude Code](https://claude.ai/download)）。
+<br>
+
+### 🖥️ 运行界面
+通过我们精心设计的终端面板，全景掌控对抗审查的每一处细节。
+
+<div align="center">
+  <img src="assets/work-interface-1.jpg" alt="启动配置面板" width="800" style="border-radius: 8px; margin-bottom: 20px;">
+  <br><br>
+  <img src="assets/work-interface-2.jpg" alt="实时对峙大屏" width="800" style="border-radius: 8px;">
+</div>
+
+<br>
+
+### 🚀 快速接入
+**环境要求：** [Rust](https://rustup.rs/) 1.75+ 以及至少一个可用的 AI 命令行工具（如 [Claude Code](https://claude.ai/download)）。
 
 ```bash
-# 1. 装备这把终极代码审查神器 (开发者推荐本地运行)
+# 1. 部署这款企业级审计框架 (开发者推荐本地编译运行)
 git clone https://github.com/cloveric/mdtalk && cd mdtalk
 cargo run -- --project .
 
-# 2. 让两个 AI 开始审查你的项目
+# 2. 对当前项目发起对抗审查
 mdtalk --project /path/to/your/project
 
-# 3. 开启双 Claude 的终极内战！
+# 3. 指定双端模型（如：双 Claude 内部博弈）
 mdtalk --project . --agent-a claude --agent-b claude
 
-# 4. 预览极其华丽的终端 UI
+# 4. 预览 TUI 可视化布局
 mdtalk --demo
 ```
-
-### ⚙️ 核心参数与工作流流转
-
-| 概念 | 战斗法则 | 默认值 | 调整指令 |
-|------|----------|:------:|----------|
-| **轮次 (Round)** | 一次完整的“死斗+修复”循环。打完一架，改完代码，拿着新代码再打一架！ | 1 | `--max-rounds` |
-| **讨论 (Exchange)** | 每一轮里面的互喷回合数：A 喷一句 → B 回喷一句 → 看看有没有达成共识。 | 5 | `--max-exchanges` |
-
-**举例说明：** `--max-rounds 2 --max-exchanges 3`  
-意思是：最多打 2 场大战（包含2次代码自动修复），每场大战里最多互喷 3 个回合！
 
 <br>
 
@@ -169,13 +166,12 @@ mdtalk --demo
 
 ---
 
-🔥 **普通的 AI 告诉你 "代码不错"。左右互博告诉你 "拿命来证明！"** 🔥  
-**最好的代码审查，就是一场以共识告终的激烈争吵。**
+🔥 **让每一次提交都无懈可击。体验未来级的代码审查。** 🔥
 
-如果这个项目曾经拯救过你的生产环境（或者即将拯救），**请用你的 ⭐ 狠狠地砸向我们！**
+如果这款工具帮助你拦截了生产环境的致命故障，**请给予我们一颗 🌟 Star**。
 
 [![Star this project](https://img.shields.io/github/stars/cloveric/mdtalk?style=social)](https://github.com/cloveric/mdtalk/stargazers)
 
-[🐛 报告 Bug](https://github.com/cloveric/mdtalk/issues) &nbsp;·&nbsp; [💡 提出神仙需求](https://github.com/cloveric/mdtalk/issues)
+[🐛 提交 Issue](https://github.com/cloveric/mdtalk/issues) &nbsp;·&nbsp; [💡 探讨未来特性](https://github.com/cloveric/mdtalk/issues)
 
 </div>
