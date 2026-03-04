@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="MDTalk" width="800">
+<img src="assets/banner.jpg" alt="MDTalk" width="800">
 
 <br>
 
