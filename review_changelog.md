@@ -231,3 +231,52 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 21:07:45
+
+已根据 `conversation.md` 中达成共识的改进项完成代码修复并落地到源码。
+
+主要改动：
+
+- 共识判定修复（跨关键词转折、`check_b_only` 宽松语义、中文否定窗口扩大）
+  - [src/consensus.rs:42](C:/Users/hangw/mdtalk/src/consensus.rs:42)
+  - [src/consensus.rs:117](C:/Users/hangw/mdtalk/src/consensus.rs:117)
+  - [src/consensus.rs:148](C:/Users/hangw/mdtalk/src/consensus.rs:148)
+  - [src/consensus.rs:270](C:/Users/hangw/mdtalk/src/consensus.rs:270)
+
+- 尾部读取 UTF-8 边界修复（避免多字节截断乱码）
+  - [src/conversation.rs:8](C:/Users/hangw/mdtalk/src/conversation.rs:8)
+  - [src/conversation.rs:101](C:/Users/hangw/mdtalk/src/conversation.rs:101)
+  - [src/conversation.rs:144](C:/Users/hangw/mdtalk/src/conversation.rs:144)
+
+- Windows prompt 长度改为动态预算（按实际命令前缀/模式计算）
+  - [src/agent.rs:34](C:/Users/hangw/mdtalk/src/agent.rs:34)
+  - [src/agent.rs:89](C:/Users/hangw/mdtalk/src/agent.rs:89)
+  - [src/agent.rs:326](C:/Users/hangw/mdtalk/src/agent.rs:326)
+
+- Git 解析与分支收尾修复
+  - `git status --porcelain -z` 解析抽离并增强健壮性：[src/orchestrator.rs:71](C:/Users/hangw/mdtalk/src/orchestrator.rs:71)
+  - merge 失败后自动 `merge --abort` + 切回 review 分支：[src/orchestrator.rs:209](C:/Users/hangw/mdtalk/src/orchestrator.rs:209)
+
+- 状态广播性能优化（降低 `state.clone()` 深拷贝成本）
+  - `logs` / `conversation_preview` 改为 `Arc`：[src/orchestrator.rs:548](C:/Users/hangw/mdtalk/src/orchestrator.rs:548)
+
+- Dashboard 行为改进
+  - 完成态不再 30 秒自动退出（改为用户主动退出/重启）：[src/dashboard/mod.rs:131](C:/Users/hangw/mdtalk/src/dashboard/mod.rs:131)
+  - 事件排空不再吞掉 poll/read 错误，改为可见告警：[src/dashboard/events.rs:15](C:/Users/hangw/mdtalk/src/dashboard/events.rs:15)
+  - `--no-apply` 语义可见化（启动提示 + UI 强制态显示）：[src/main.rs:151](C:/Users/hangw/mdtalk/src/main.rs:151), [src/dashboard/app.rs:37](C:/Users/hangw/mdtalk/src/dashboard/app.rs:37), [src/dashboard/ui.rs:140](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:140)
+
+- 测试辅助脚本平台分支去重（减少重复）
+  - [src/orchestrator.rs:1612](C:/Users/hangw/mdtalk/src/orchestrator.rs:1612)
+
+新增/更新了对应回归测试（consensus/conversation/agent/orchestrator/dashboard-events）。
+
+验证结果：
+
+- `cargo fmt --all` 通过
+- `cargo test` 通过（79 passed, 0 failed）
+
+补充：工作区里原本有未跟踪文件 `demo_output.txt`，本次未改动它。
+
+
+---
+

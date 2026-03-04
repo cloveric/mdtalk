@@ -39,6 +39,9 @@ const ENGLISH_TURNING_TOKENS: &[&str] = &[
     "nonetheless",
 ];
 const CHINESE_TURNING_TOKENS: &[&str] = &["但", "但是", "不过", "然而", "可是"];
+const CHINESE_NEGATION_LOOKBACK_CHARS: usize = 16;
+const TURNING_SCAN_MAX_BYTES: usize = 1200;
+const TURNING_SCAN_MAX_SENTENCES: usize = 6;
 
 fn is_clause_boundary(ch: char) -> bool {
     matches!(
@@ -67,7 +70,7 @@ fn has_recent_chinese_negation(preceding: &str) -> bool {
     let tail: String = preceding
         .chars()
         .rev()
-        .take(8)
+        .take(CHINESE_NEGATION_LOOKBACK_CHARS)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -111,7 +114,7 @@ fn has_chinese_turning_word(text: &str) -> bool {
 }
 
 fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) -> bool {
-    let mut context_end = (keyword_end + 200).min(text_lower.len());
+    let mut context_end = (keyword_end + TURNING_SCAN_MAX_BYTES).min(text_lower.len());
     while context_end > keyword_end && !text_lower.is_char_boundary(context_end) {
         context_end -= 1;
     }
@@ -128,18 +131,26 @@ fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) ->
             return true;
         }
         inspected_sentences += 1;
-        if inspected_sentences >= 2 {
+        if inspected_sentences >= TURNING_SCAN_MAX_SENTENCES {
             return false;
         }
         sentence_start = idx + ch.len_utf8();
     }
 
-    if inspected_sentences < 2 {
+    if inspected_sentences < TURNING_SCAN_MAX_SENTENCES {
         let tail = following[sentence_start..].trim_start();
         return has_english_turning_word(tail) || has_chinese_turning_word(tail);
     }
 
     false
+}
+
+fn has_turning_word_in_preceding_clause(local_preceding: &str) -> bool {
+    let clause = local_preceding.trim_end();
+    if clause.is_empty() {
+        return false;
+    }
+    has_english_turning_word(clause) || has_chinese_turning_word(clause)
 }
 
 /// Check if a keyword appears in the text in an affirmative context.
@@ -185,11 +196,11 @@ fn has_affirmative_keyword(text: &str, keyword: &str, require_unambiguous: bool)
 
         let negated = is_negated_context(local_preceding);
 
-        let has_turning =
-            require_unambiguous && has_turning_word_in_following_clause(&text_lower, abs_end);
+        let has_turning = require_unambiguous
+            && (has_turning_word_in_following_clause(&text_lower, abs_end)
+                || has_turning_word_in_preceding_clause(local_preceding));
 
-        let is_partial =
-            require_unambiguous && has_partial_qualifier(local_preceding);
+        let is_partial = require_unambiguous && has_partial_qualifier(local_preceding);
 
         if !negated && !has_turning && !is_partial {
             return true;
@@ -201,20 +212,63 @@ fn has_affirmative_keyword(text: &str, keyword: &str, require_unambiguous: bool)
     false
 }
 
-/// Check whether an agent's response shows unambiguous consensus.
-/// Returns false if the response contains mixed signals (both affirmative
-/// and negated consensus keywords).
+/// Extract the conclusion section from an agent's response.
+///
+/// Looks for a "CONCLUSION:" or "结论：" line. If found, returns only that line
+/// and everything after it. Otherwise, returns the last ~500 characters as
+/// a best-effort fallback (the conclusion is always at the end of the response).
+fn extract_conclusion_section(response: &str) -> &str {
+    // Look for explicit conclusion markers (case-insensitive search)
+    let lower = response.to_lowercase();
+    for marker in &["conclusion:", "结论：", "结论:"] {
+        if let Some(pos) = lower.rfind(marker) {
+            // Find the start of the line containing the marker
+            let line_start = response[..pos].rfind('\n').map_or(0, |p| p + 1);
+            return &response[line_start..];
+        }
+    }
+    // No conclusion marker found — use the last 3 non-empty lines as fallback.
+    // Short responses (no newlines) are returned in full.
+    let mut line_starts: Vec<usize> = vec![0];
+    for (i, ch) in response.char_indices() {
+        if ch == '\n' {
+            line_starts.push(i + 1);
+        }
+    }
+    // Skip trailing empty lines
+    while line_starts.len() > 1 {
+        let last = *line_starts.last().unwrap();
+        if last >= response.len() || response[last..].trim().is_empty() {
+            line_starts.pop();
+        } else {
+            break;
+        }
+    }
+    let start_idx = if line_starts.len() > 3 {
+        line_starts[line_starts.len() - 3]
+    } else {
+        0
+    };
+    &response[start_idx..]
+}
+
+/// Check whether an agent's response shows consensus.
+///
+/// Only checks the conclusion section of the response (the "CONCLUSION:" / "结论："
+/// line and following text) to avoid false positives from per-item evaluation
+/// markers like "【成立】" in the body of the response.
 fn agent_shows_consensus(response: &str, keywords: &[String], require_unambiguous: bool) -> bool {
+    let conclusion = extract_conclusion_section(response);
     keywords
         .iter()
-        .any(|kw| has_affirmative_keyword(response, kw, require_unambiguous))
+        .any(|kw| has_affirmative_keyword(conclusion, kw, require_unambiguous))
 }
 
 /// Check consensus based on Agent B's response only, accepting full OR partial agreement.
 /// Used when: (a) max_exchanges == 1 (only one shot), or (b) it's the last exchange
 /// (exhausted all exchanges — apply whatever was agreed).
 pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
-    if agent_shows_consensus(agent_b_response, keywords, true) {
+    if agent_shows_consensus(agent_b_response, keywords, false) {
         ConsensusResult {
             reached: true,
             summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
@@ -475,13 +529,13 @@ mod tests {
     }
 
     #[test]
-    fn b_only_rejects_turning_word_after_affirmative() {
+    fn b_only_accepts_turning_word_after_affirmative_as_partial() {
         let kws = vec!["agree".into(), "同意".into()];
         let r = check_b_only(
             "I agree with items 1-3, but point 4 is completely wrong.",
             &kws,
         );
-        assert!(!r.reached);
+        assert!(r.reached);
     }
 
     #[test]
@@ -489,6 +543,33 @@ mod tests {
         let kws = vec!["partially agree".into()];
         let r = check_b_only("CONCLUSION: partially agree", &kws);
         assert!(r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_cross_keyword_turning_combo() {
+        let kws = vec!["agree".into(), "LGTM".into()];
+        let r = check_b_full_only("I agree with the plan, but LGTM is premature.", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_turning_word_even_when_it_appears_later_than_200_bytes() {
+        let kws = vec!["agree".into()];
+        let long_middle = " detail ".repeat(40);
+        let text = format!("I agree with items 1-3.{long_middle} But item 4 is still wrong.");
+        let r = check_b_full_only(&text, &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn chinese_negation_with_long_modifier_is_still_negated() {
+        let kws = vec!["同意".into()];
+        let r = check_consensus(
+            "我们团队经过讨论后认为目前并不完全同意这个方案。",
+            "我同意所有改进建议。",
+            &kws,
+        );
+        assert!(!r.reached);
     }
 
     #[test]
@@ -517,5 +598,81 @@ mod tests {
             &kws,
         );
         assert!(!r.reached);
+    }
+
+    #[test]
+    fn per_item_markers_without_conclusion_do_not_trigger_consensus() {
+        // B's response has many "【成立】" per-item markers but no conclusion line
+        let kws = vec!["成立".into(), "同意".into()];
+        let response = "\
+**验证结论结果（基于当前代码）**\n\
+\n\
+1. 【成立】按关键词匹配 `any` 匹配，确实可能漏检。\n\
+2. 【部分成立】`check_b_only` 确传了 `require_unambiguous=true`。\n\
+3. 【成立】`read_tail_lines` 按字节切割存在风险。\n\
+4. 【成立】`OrchestratorState` 包含大字段，clone 有性能风险。\n\
+5. 【成立】Windows 仅用固定 `7600` 校验 prompt 长度，未纳入预留。\n\
+6. 【成立】merge 失败后仅记录日志，不会切回原分支。\n\
+7. 【部分成立】加载条件 `no_apply` && dashboard 确实存在歧义。\n\
+8. 【成立】完成态 30 秒后全自动退出。\n\
+9. 【部分成立】代码确实依赖 `entry[3..]` 和最小长度假设。\n\
+\n\
+以上是逐条核对结果，需要进一步讨论。";
+        let r = check_b_full_only(response, &kws);
+        assert!(
+            !r.reached,
+            "per-item markers should not trigger consensus without a conclusion line"
+        );
+    }
+
+    #[test]
+    fn conclusion_line_triggers_consensus_despite_body_markers() {
+        let kws = vec!["成立".into(), "同意".into(), "结论：同意".into()];
+        let response = "\
+1. 【成立】问题确认。\n\
+2. 【部分成立】问题部分存在。\n\
+3. 【不成立】代码已修复。\n\
+\n\
+结论：同意";
+        let r = check_b_full_only(response, &kws);
+        assert!(r.reached, "conclusion line should trigger consensus");
+    }
+
+    #[test]
+    fn conclusion_disagree_does_not_trigger_consensus() {
+        let kws = vec!["成立".into(), "同意".into()];
+        let response = "\
+1. 【成立】问题确认。\n\
+2. 【成立】确实存在。\n\
+\n\
+结论：不同意，还需进一步讨论。";
+        let r = check_b_full_only(response, &kws);
+        assert!(
+            !r.reached,
+            "conclusion with disagree should not be consensus"
+        );
+    }
+
+    #[test]
+    fn extract_conclusion_finds_chinese_marker() {
+        let text = "正文内容。\n\n结论：同意所有修改。";
+        let section = extract_conclusion_section(text);
+        assert!(section.contains("结论：同意"));
+        assert!(!section.contains("正文内容"));
+    }
+
+    #[test]
+    fn extract_conclusion_finds_english_marker() {
+        let text = "Body text here.\n\nCONCLUSION: I agree with all changes.";
+        let section = extract_conclusion_section(text);
+        assert!(section.contains("CONCLUSION: I agree"));
+        assert!(!section.contains("Body text"));
+    }
+
+    #[test]
+    fn extract_conclusion_fallback_uses_tail() {
+        let text = "Some review text without a conclusion marker. I agree.";
+        let section = extract_conclusion_section(text);
+        assert!(section.contains("I agree"));
     }
 }
