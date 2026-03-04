@@ -13,6 +13,7 @@ pub struct DashboardApp {
     pub state: OrchestratorState,
     pub scroll_offset: u16,
     pub log_scroll_offset: u16,
+    pub conversation_visible_lines: u16,
     pub should_quit: bool,
     pub waiting_for_start: bool,
     pub restart_requested: bool,
@@ -64,6 +65,7 @@ impl DashboardApp {
             state: initial_state,
             scroll_offset: 0,
             log_scroll_offset: 0,
+            conversation_visible_lines: 1,
             should_quit: false,
             waiting_for_start: true,
             restart_requested: false,
@@ -216,20 +218,35 @@ impl DashboardApp {
 
     pub fn update_state(&mut self, new_state: OrchestratorState) {
         self.state = new_state;
+        self.language = self.state.language.clone();
         // Auto-scroll logs to bottom (log panel is Length(6) - 2 borders = 4 visible lines)
         let log_len = self.state.logs.len() as u16;
         if log_len > 4 {
             self.log_scroll_offset = log_len - 4;
         }
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.max_conversation_scroll_offset());
     }
 
     pub fn scroll_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
-    pub fn scroll_down(&mut self) {
+    pub fn set_conversation_visible_lines(&mut self, visible_lines: u16) {
+        self.conversation_visible_lines = visible_lines.max(1);
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.max_conversation_scroll_offset());
+    }
+
+    fn max_conversation_scroll_offset(&self) -> u16 {
         let total_lines = self.state.conversation_preview.lines().count() as u16;
-        if self.scroll_offset < total_lines.saturating_sub(1) {
+        total_lines.saturating_sub(self.conversation_visible_lines)
+    }
+
+    pub fn scroll_down(&mut self) {
+        if self.scroll_offset < self.max_conversation_scroll_offset() {
             self.scroll_offset = self.scroll_offset.saturating_add(1);
         }
     }

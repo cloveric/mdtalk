@@ -76,35 +76,33 @@ impl AgentRunner {
         let start = Instant::now();
 
         #[cfg(windows)]
-        let mut child = {
+        let (command_program, command_args) = {
             // On Windows, CLI tools installed via npm are often .cmd scripts that
             // are more reliable when launched through cmd /C.
             let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
             full_args.extend(args.clone());
-            let mut cmd = Command::new("cmd");
-            cmd.kill_on_drop(true)
-                .args(&full_args)
-                .current_dir(project_path)
-                .env_remove("CLAUDECODE")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            cmd.spawn()
-                .with_context(|| format!("Failed to spawn agent '{}'", self.name))?
+            ("cmd".to_string(), full_args)
         };
 
         #[cfg(not(windows))]
-        let mut child = {
-            let mut cmd = Command::new(&self.command_program);
-            cmd.kill_on_drop(true)
-                .args(&args)
-                .process_group(0)
-                .current_dir(project_path)
-                .env_remove("CLAUDECODE")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            cmd.spawn()
-                .with_context(|| format!("Failed to spawn agent '{}'", self.name))?
-        };
+        let (command_program, command_args) = (self.command_program.clone(), args.clone());
+
+        let mut cmd = Command::new(&command_program);
+        cmd.kill_on_drop(true)
+            .args(&command_args)
+            .current_dir(project_path)
+            .env_remove("CLAUDECODE")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(unix)]
+        {
+            cmd.process_group(0);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to spawn agent '{}'", self.name))?;
 
         // Read stdout/stderr concurrently with wait to avoid deadlock
         // when pipe buffers fill up.

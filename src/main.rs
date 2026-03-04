@@ -134,11 +134,16 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 eprintln!("警告: 无法创建日志文件 mdtalk.log: {e}");
-                // Fall back to no logging in dashboard mode
+                tracing_subscriber::fmt()
+                    .with_env_filter("mdtalk=info")
+                    .with_writer(std::io::stderr)
+                    .with_ansi(false)
+                    .init();
             }
         }
 
         let no_apply = cli.no_apply;
+        let refresh_rate_ms = cfg.dashboard.refresh_rate_ms;
 
         loop {
             let cfg_clone = cfg.clone();
@@ -162,8 +167,9 @@ async fn main() -> Result<()> {
             });
 
             let state_rx_main = state_rx.clone();
-            let dashboard_handle =
-                tokio::task::spawn_blocking(move || dashboard::run(state_rx, start_tx, cmd_tx));
+            let dashboard_handle = tokio::task::spawn_blocking(move || {
+                dashboard::run(state_rx, start_tx, cmd_tx, refresh_rate_ms)
+            });
 
             // Wait for dashboard to finish (user presses q or orchestrator sets finished).
             // Then request graceful orchestrator shutdown.

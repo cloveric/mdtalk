@@ -293,7 +293,12 @@ fn should_append_round_header(exchange: u32) -> bool {
     exchange == 1
 }
 
-fn build_agent_a_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bool) -> String {
+fn build_agent_a_prompt(
+    exchange_kind: ExchangeKind,
+    conv_filename: &str,
+    previous_round_code_modified: bool,
+    en: bool,
+) -> String {
     if en {
         return match exchange_kind {
             ExchangeKind::InitialReview => "You are participating in a multi-agent code review workflow. \
@@ -304,11 +309,18 @@ Please thoroughly read the project's source files (src/ directory) and provide a
 - Improvement suggestions\n\n\
 Prioritize findings by severity."
                 .to_string(),
-            ExchangeKind::RoundReReview => format!(
-                "You are participating in a multi-agent code review workflow. \
-Code was modified after the previous round. \
+            ExchangeKind::RoundReReview => {
+                let modification_context = if previous_round_code_modified {
+                    "Code was modified after the previous round."
+                } else {
+                    "No code changes were applied after the previous round."
+                };
+                format!(
+                    "You are participating in a multi-agent code review workflow. \
+{modification_context} \
 First read the full review history in {conv_filename}, then re-review src/ to verify previously identified issues are fixed and to detect any newly introduced issues."
-            ),
+                )
+            }
             ExchangeKind::FollowUp => format!(
                 "You are participating in a multi-agent code review workflow. \
 First read the full conversation history in {conv_filename}.\n\n\
@@ -331,13 +343,20 @@ You MUST end your response with one of these exact conclusion lines:\n\
 - 改进建议\n\n\
 请按优先级排列你的发现。"
             .to_string(),
-        ExchangeKind::RoundReReview => format!(
-            "你正在参与一个多 agent 代码审查流程。\
-上一轮审查后代码已被修改。\
+        ExchangeKind::RoundReReview => {
+            let modification_context = if previous_round_code_modified {
+                "上一轮审查后代码已被修改。"
+            } else {
+                "上一轮审查后没有执行代码修改。"
+            };
+            format!(
+                "你正在参与一个多 agent 代码审查流程。\
+{modification_context}\
 请先阅读当前目录下的 {conv_filename} 文件了解完整的审查对话历史，\
 然后重新审查 src/ 目录下的源代码，检查之前发现的问题是否已修复，\
 以及是否引入了新问题。给出你的审查意见。"
-        ),
+            )
+        }
         ExchangeKind::FollowUp => format!(
             "你正在参与一个多 agent 代码审查流程。\
 请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
@@ -479,14 +498,14 @@ const PREVIEW_TAIL_LINES: usize = 300;
 impl std::fmt::Display for Phase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Phase::Init => write!(f, "初始化"),
-            Phase::AgentAReviewing => write!(f, "Agent A 审查中"),
-            Phase::AgentBResponding => write!(f, "Agent B 回应中"),
-            Phase::CheckConsensus => write!(f, "检测共识"),
-            Phase::WaitingForApply => write!(f, "等待确认修改"),
-            Phase::ApplyChanges => write!(f, "修改代码中"),
-            Phase::WaitingForMerge => write!(f, "等待合并"),
-            Phase::Done => write!(f, "已完成"),
+            Phase::Init => write!(f, "Initializing"),
+            Phase::AgentAReviewing => write!(f, "Agent A Reviewing"),
+            Phase::AgentBResponding => write!(f, "Agent B Responding"),
+            Phase::CheckConsensus => write!(f, "Checking Consensus"),
+            Phase::WaitingForApply => write!(f, "Waiting For Apply"),
+            Phase::ApplyChanges => write!(f, "Applying Changes"),
+            Phase::WaitingForMerge => write!(f, "Waiting For Merge"),
+            Phase::Done => write!(f, "Done"),
         }
     }
 }
@@ -693,6 +712,8 @@ pub async fn run(
     let agent_b = AgentRunner::new(&config.agent_b);
     let conv_filename = config.review.output_file.clone();
 
+    let mut previous_round_code_modified = false;
+
     // === Outer loop: rounds (each round = discussion → consensus → code fix) ===
     for round in 1..=config.review.max_rounds {
         state.current_round = round;
@@ -717,12 +738,8 @@ pub async fn run(
 
         let round_start = Instant::now();
         let mut consensus_reached = false;
+        let mut code_modified_in_round = false;
         let mut execution_error: Option<anyhow::Error> = None;
-
-        #[allow(unused_assignments)]
-        let mut last_a_response = String::new();
-        #[allow(unused_assignments)]
-        let mut last_b_response = String::new();
 
         // === Inner loop: exchanges (A speaks + B speaks + consensus check) ===
         for exchange in 1..=config.review.max_exchanges {
@@ -752,7 +769,12 @@ pub async fn run(
             });
             let _ = state_tx.send(state.clone());
 
-            let a_prompt = build_agent_a_prompt(exchange_kind, &conv_filename, state.is_en());
+            let a_prompt = build_agent_a_prompt(
+                exchange_kind,
+                &conv_filename,
+                previous_round_code_modified,
+                state.is_en(),
+            );
 
             let a_label = if state.is_en() {
                 format!(
@@ -762,7 +784,7 @@ pub async fn run(
             } else {
                 format!("第{round}轮 讨论{exchange}: Agent A ({})", agent_a.name)
             };
-            match run_agent_with_heartbeat(
+            let last_a_response = match run_agent_with_heartbeat(
                 &agent_a,
                 &a_prompt,
                 &project_path,
@@ -773,9 +795,9 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
-                    last_a_response = output.content.clone();
+                    let response = output.content;
                     let label = discussion_role_label(exchange_kind, state.is_en());
-                    conversation.append_agent_entry(&agent_a.name, label, &output.content)?;
+                    conversation.append_agent_entry(&agent_a.name, label, &response)?;
                     state.log(&if state.is_en() {
                         format!(
                             "R{round} E{exchange}: Agent A done ({:.0}s)",
@@ -787,6 +809,7 @@ pub async fn run(
                             output.duration.as_secs_f64()
                         )
                     });
+                    response
                 }
                 Err(e) => {
                     if state.is_en() {
@@ -807,7 +830,7 @@ pub async fn run(
                     }));
                     break;
                 }
-            }
+            };
 
             state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
@@ -837,7 +860,7 @@ pub async fn run(
             } else {
                 format!("第{round}轮 讨论{exchange}: Agent B ({})", agent_b.name)
             };
-            match run_agent_with_heartbeat(
+            let last_b_response = match run_agent_with_heartbeat(
                 &agent_b,
                 &b_prompt,
                 &project_path,
@@ -848,11 +871,11 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
-                    last_b_response = output.content.clone();
+                    let response = output.content;
                     conversation.append_agent_entry(
                         &agent_b.name,
                         if state.is_en() { "Response" } else { "回应" },
-                        &output.content,
+                        &response,
                     )?;
                     state.log(&if state.is_en() {
                         format!(
@@ -865,6 +888,7 @@ pub async fn run(
                             output.duration.as_secs_f64()
                         )
                     });
+                    response
                 }
                 Err(e) => {
                     if state.is_en() {
@@ -885,7 +909,7 @@ pub async fn run(
                     }));
                     break;
                 }
-            }
+            };
 
             state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
@@ -904,16 +928,10 @@ pub async fn run(
             // 3. Exchange 2+ and not the last:
             //    Both A and B must express agreement (full or partial).
             let is_last = exchange == config.review.max_exchanges;
-            let keyword_result = if is_last {
-                consensus::check_b_only(
-                    &last_b_response,
-                    &config.review.consensus_keywords,
-                )
+            let result = if is_last {
+                consensus::check_b_only(&last_b_response, &config.review.consensus_keywords)
             } else if exchange == 1 {
-                consensus::check_b_full_only(
-                    &last_b_response,
-                    &config.review.consensus_keywords,
-                )
+                consensus::check_b_full_only(&last_b_response, &config.review.consensus_keywords)
             } else {
                 consensus::check_consensus(
                     &last_a_response,
@@ -921,8 +939,6 @@ pub async fn run(
                     &config.review.consensus_keywords,
                 )
             };
-
-            let result = keyword_result;
 
             if result.reached {
                 state.log(&if state.is_en() {
@@ -1030,6 +1046,7 @@ pub async fn run(
                 }
 
                 if !confirmed {
+                    previous_round_code_modified = false;
                     state.log(&if state.is_en() {
                         format!("Round {round}: user cancelled apply")
                     } else {
@@ -1093,6 +1110,7 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
+                    code_modified_in_round = true;
                     conversation.append_agent_entry(
                         &agent_b.name,
                         if state.is_en() {
@@ -1157,6 +1175,8 @@ pub async fn run(
             state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
         }
+
+        previous_round_code_modified = code_modified_in_round;
 
         // Check if this was the last round
         if round == config.review.max_rounds {
@@ -1309,6 +1329,24 @@ mod tests {
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirCleanup {
+        path: PathBuf,
+    }
+
+    impl TestDirCleanup {
+        fn new(path: &Path) -> Self {
+            Self {
+                path: path.to_path_buf(),
+            }
+        }
+    }
+
+    impl Drop for TestDirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn unique_test_dir(name: &str) -> PathBuf {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -1470,9 +1508,26 @@ mod tests {
 
     #[test]
     fn english_agent_a_prompt_is_localized() {
-        let prompt = build_agent_a_prompt(ExchangeKind::InitialReview, "conversation.md", true);
+        let prompt =
+            build_agent_a_prompt(ExchangeKind::InitialReview, "conversation.md", true, true);
         assert!(prompt.contains("You are participating in a multi-agent code review workflow"));
         assert!(!prompt.contains("你正在参与"));
+    }
+
+    #[test]
+    fn rereview_prompt_mentions_modified_code_when_apply_ran() {
+        let prompt =
+            build_agent_a_prompt(ExchangeKind::RoundReReview, "conversation.md", true, true);
+        assert!(prompt.contains("Code was modified after the previous round."));
+        assert!(!prompt.contains("No code changes were applied after the previous round."));
+    }
+
+    #[test]
+    fn rereview_prompt_mentions_skipped_apply_when_no_code_change() {
+        let prompt =
+            build_agent_a_prompt(ExchangeKind::RoundReReview, "conversation.md", false, true);
+        assert!(prompt.contains("No code changes were applied after the previous round."));
+        assert!(!prompt.contains("Code was modified after the previous round."));
     }
 
     #[test]
@@ -1492,6 +1547,7 @@ mod tests {
     #[tokio::test]
     async fn returns_err_when_agent_a_discussion_fails() {
         let project_dir = unique_test_dir("agent-a-fails");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         let fail_cmd = script_always_fail(&project_dir, "agent_a_fail");
         let ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
         let cfg = test_config(project_dir.clone(), fail_cmd, ok_cmd);
@@ -1502,12 +1558,12 @@ mod tests {
             result.is_err(),
             "Agent A execution failure should return Err"
         );
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn returns_err_when_apply_phase_fails() {
         let project_dir = unique_test_dir("apply-fails");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
         let b_cmd = script_fail_on_second_invocation(&project_dir, "agent_b_fail_on_second_call");
         let cfg = test_config(project_dir.clone(), a_ok_cmd, b_cmd);
@@ -1515,12 +1571,12 @@ mod tests {
 
         let result = run(cfg, state_tx, false, 1, None, None).await;
         assert!(result.is_err(), "Apply-phase failure should return Err");
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn branch_mode_errors_when_review_branch_cannot_be_created() {
         let project_dir = unique_test_dir("branch-mode-non-git");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
         let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
         let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_ok_cmd.clone());
@@ -1539,12 +1595,12 @@ mod tests {
             !project_dir.join("conversation.md").exists(),
             "Branch setup should run before creating conversation.md in branch mode"
         );
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn branch_mode_commit_excludes_preexisting_dirty_files() {
         let project_dir = unique_test_dir("branch-mode-dirty-filter");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1602,13 +1658,12 @@ mod tests {
                 .any(|line| line.trim() == "preexisting.txt"),
             "session commit should not include dirty changes that existed before the session"
         );
-
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn branch_mode_keeps_branch_info_when_no_consensus() {
         let project_dir = unique_test_dir("branch-mode-no-consensus");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1634,13 +1689,12 @@ mod tests {
             final_state.review_branch.is_some() && final_state.original_branch.is_some(),
             "branch info should still be exposed when branch mode exits early"
         );
-
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn git_commit_filtered_returns_error_outside_git_repo() {
         let project_dir = unique_test_dir("git-commit-non-git");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         fs::write(project_dir.join("file.txt"), "content").expect("failed to write test file");
 
         let result = git_commit_filtered(&project_dir, "test commit", &HashSet::new()).await;
@@ -1648,13 +1702,12 @@ mod tests {
             result.is_err(),
             "git_commit_filtered should fail when git status cannot run"
         );
-
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
     async fn git_commit_filtered_keeps_unrelated_staged_entries() {
         let project_dir = unique_test_dir("git-commit-keep-staged");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         git_must_succeed(&project_dir, &["init"]);
         git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
         git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
@@ -1727,13 +1780,12 @@ mod tests {
                 .any(|line| line.trim() == "keep_staged.txt"),
             "filtered commit should exclude pre-existing staged file"
         );
-
-        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[test]
     fn state_logs_are_bounded() {
         let project_dir = unique_test_dir("state-log-cap");
+        let _cleanup = TestDirCleanup::new(&project_dir);
         let cfg = test_config(
             project_dir.clone(),
             "agent_a_cmd".to_string(),
@@ -1756,7 +1808,5 @@ mod tests {
                 .is_some_and(|line| line.contains("log line 399")),
             "latest logs should be kept"
         );
-
-        let _ = fs::remove_dir_all(project_dir);
     }
 }

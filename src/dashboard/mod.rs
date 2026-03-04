@@ -43,6 +43,7 @@ pub fn run(
     mut state_rx: watch::Receiver<OrchestratorState>,
     start_tx: oneshot::Sender<StartConfig>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    refresh_rate_ms: u64,
 ) -> Result<DashboardExit> {
     // Setup terminal
     enable_raw_mode()?;
@@ -51,7 +52,13 @@ pub fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_dashboard_loop(&mut terminal, &mut state_rx, start_tx, cmd_tx);
+    let result = run_dashboard_loop(
+        &mut terminal,
+        &mut state_rx,
+        start_tx,
+        cmd_tx,
+        refresh_rate_ms,
+    );
 
     // Always restore terminal, even on error
     restore_terminal(&mut terminal);
@@ -64,6 +71,7 @@ fn run_dashboard_loop(
     state_rx: &mut watch::Receiver<OrchestratorState>,
     start_tx: oneshot::Sender<StartConfig>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    refresh_rate_ms: u64,
 ) -> Result<DashboardExit> {
     // Drain any buffered key events from launching the command
     events::drain_buffered_events();
@@ -71,9 +79,14 @@ fn run_dashboard_loop(
     let initial_state = state_rx.borrow().clone();
     let mut app = DashboardApp::new(initial_state, start_tx, cmd_tx);
 
-    let tick_rate = Duration::from_millis(100);
+    let tick_rate = Duration::from_millis(refresh_rate_ms.max(1));
 
     loop {
+        let terminal_area = terminal.size()?;
+        let content_height = terminal_area.height.saturating_sub(10);
+        let conversation_visible_lines = content_height.saturating_sub(2);
+        app.set_conversation_visible_lines(conversation_visible_lines);
+
         // Draw
         terminal.draw(|f| ui::draw(f, &app))?;
 

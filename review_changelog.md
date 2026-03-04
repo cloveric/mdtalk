@@ -75,3 +75,43 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 19:45:11
+
+已按 `conversation.md` 的共识结论完成代码修复，并已直接改动源码。
+
+已落地的修复点（对应“成立/可执行的部分成立”）：
+
+- `RoundReReview` prompt 改为按上一轮是否真的执行了 apply 动态生成，避免误导  
+  [orchestrator.rs#L296](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L296) [orchestrator.rs#L715](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L715) [orchestrator.rs#L1179](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L1179)
+- 默认超时从 `600` 对齐为 `900`，并同步测试断言  
+  [config.rs#L68](/C:/Users/hangw/mdtalk/src/config.rs#L68) [config.rs#L429](/C:/Users/hangw/mdtalk/src/config.rs#L429)
+- 去掉共识检测阶段的冗余绑定，且不再依赖“空字符串占位”的 `last_*_response` 写法  
+  [orchestrator.rs#L790](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L790) [orchestrator.rs#L867](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L867) [orchestrator.rs#L935](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L935)
+- `Phase::Display` 改为中立英文文本（不再强制中文）  
+  [orchestrator.rs#L498](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L498)
+- `dashboard.refresh_rate_ms` 现已真正驱动 dashboard tick 频率  
+  [dashboard/mod.rs#L46](/C:/Users/hangw/mdtalk/src/dashboard/mod.rs#L46) [dashboard/mod.rs#L82](/C:/Users/hangw/mdtalk/src/dashboard/mod.rs#L82) [main.rs#L171](/C:/Users/hangw/mdtalk/src/main.rs#L171)
+- 滚动上界改为考虑可视行数，修复过滚；同时同步 `state.language` 到 UI 渲染语言  
+  [dashboard/app.rs#L16](/C:/Users/hangw/mdtalk/src/dashboard/app.rs#L16) [dashboard/app.rs#L236](/C:/Users/hangw/mdtalk/src/dashboard/app.rs#L236) [dashboard/ui.rs#L170](/C:/Users/hangw/mdtalk/src/dashboard/ui.rs#L170)
+- Markdown 标题高亮从 `starts_with('#')` 收紧为 `# ` / `## `，避免误匹配代码行  
+  [dashboard/ui.rs#L360](/C:/Users/hangw/mdtalk/src/dashboard/ui.rs#L360)
+- `agent.rs` Windows/Unix 启动分支去重，保留平台差异配置点  
+  [agent.rs#L79](/C:/Users/hangw/mdtalk/src/agent.rs#L79) [agent.rs#L100](/C:/Users/hangw/mdtalk/src/agent.rs#L100)
+- dashboard 模式日志文件创建失败时，降级到 `stderr` subscriber（不再静默丢日志）  
+  [main.rs#L136](/C:/Users/hangw/mdtalk/src/main.rs#L136)
+- `Conversation` append 改为复用已打开句柄（`Mutex<Option<File>>`），避免每次 reopen  
+  [conversation.rs#L14](/C:/Users/hangw/mdtalk/src/conversation.rs#L14) [conversation.rs#L26](/C:/Users/hangw/mdtalk/src/conversation.rs#L26)
+- 测试目录清理改为 RAII guard，避免断言失败时泄漏临时目录（`orchestrator/config/conversation`）  
+  [orchestrator.rs#L1333](/C:/Users/hangw/mdtalk/src/orchestrator.rs#L1333) [config.rs#L314](/C:/Users/hangw/mdtalk/src/config.rs#L314) [conversation.rs#L183](/C:/Users/hangw/mdtalk/src/conversation.rs#L183)
+
+验证结果：
+
+- 已执行 `cargo test`，`42 passed, 0 failed`。
+
+说明：
+
+- `demo_output.txt` 仍为未跟踪文件，未改动。
+
+
+---
+

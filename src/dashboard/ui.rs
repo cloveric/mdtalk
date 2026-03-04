@@ -167,7 +167,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
 
 fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let state = &app.state;
-    let en = app.language == "en";
+    let en = state.language == "en";
 
     let elapsed = state
         .session_start
@@ -330,7 +330,7 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
 fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let state = &app.state;
-    let en = app.language == "en";
+    let en = state.language == "en";
 
     // Split content area: left = conversation preview, right = agent status
     let chunks = Layout::default()
@@ -357,7 +357,7 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ))
-            } else if line.starts_with('#') {
+            } else if line.starts_with("## ") || line.starts_with("# ") {
                 Line::from(Span::styled(
                     line.to_string(),
                     Style::default()
@@ -493,7 +493,7 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
 fn draw_logs(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let state = &app.state;
-    let en = app.language == "en";
+    let en = state.language == "en";
 
     let log_lines: Vec<Line> = state
         .logs

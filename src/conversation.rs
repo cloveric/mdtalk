@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -10,6 +11,7 @@ use chrono::Local;
 pub struct Conversation {
     path: PathBuf,
     project_name: String,
+    append_file: Mutex<Option<File>>,
 }
 
 impl Conversation {
@@ -17,7 +19,30 @@ impl Conversation {
         Self {
             path: output_dir.join(filename),
             project_name: project_name.to_string(),
+            append_file: Mutex::new(None),
         }
+    }
+
+    fn append_text(&self, text: &str) -> Result<()> {
+        let mut guard = self
+            .append_file
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Conversation append lock poisoned"))?;
+        if guard.is_none() {
+            let file = OpenOptions::new()
+                .append(true)
+                .open(&self.path)
+                .with_context(|| "Failed to open conversation file for append")?;
+            *guard = Some(file);
+        }
+        let file = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Conversation append file was not initialized"))?;
+        file.write_all(text.as_bytes())
+            .with_context(|| "Failed to append to conversation file")?;
+        file.flush()
+            .with_context(|| "Failed to flush conversation append writes")?;
+        Ok(())
     }
 
     /// Create the conversation file with a localized header.
@@ -33,21 +58,24 @@ impl Conversation {
         };
         std::fs::write(&self.path, &header)
             .with_context(|| format!("Failed to create conversation file {:?}", self.path))?;
+
+        let mut guard = self
+            .append_file
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Conversation append lock poisoned"))?;
+        *guard = None;
+
         Ok(())
     }
 
     /// Append a localized round header.
     pub fn append_round_header_with_language(&self, round: u32, en: bool) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .with_context(|| "Failed to open conversation file for append")?;
-        if en {
-            write!(file, "### Round {round}\n\n")?;
+        let line = if en {
+            format!("### Round {round}\n\n")
         } else {
-            write!(file, "### 第{round}轮\n\n")?;
-        }
-        Ok(())
+            format!("### 第{round}轮\n\n")
+        };
+        self.append_text(&line)
     }
 
     /// Append an agent entry within the current round.
@@ -62,26 +90,16 @@ impl Conversation {
             "#### {agent_name} - {role_label} [{now}]\n\n\
              {content}\n\n---\n\n"
         );
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .with_context(|| "Failed to open conversation file for append")?;
-        write!(file, "{entry}")?;
-        Ok(())
+        self.append_text(&entry)
     }
 
     /// Append a localized consensus marker.
     pub fn append_consensus_with_language(&self, summary: &str, en: bool) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .with_context(|| "Failed to open conversation file for append")?;
         if en {
-            write!(file, "### Consensus Reached ✓\n\n{summary}\n\n")?;
+            self.append_text(&format!("### Consensus Reached ✓\n\n{summary}\n\n"))
         } else {
-            write!(file, "### 已达成共识 ✓\n\n{summary}\n\n")?;
+            self.append_text(&format!("### 已达成共识 ✓\n\n{summary}\n\n"))
         }
-        Ok(())
     }
 
     /// Read only the last `max_lines` lines of the conversation file.
@@ -155,25 +173,42 @@ pub fn append_changelog_with_language(
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::Conversation;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn unique_test_dir(name: &str) -> std::path::PathBuf {
-        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("mdtalk-conv-{name}-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("failed to create test dir");
-        dir
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new(name: &str) -> Self {
+            let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("mdtalk-conv-{name}-{}-{id}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("failed to create test dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]
     fn read_tail_lines_returns_latest_lines_only() {
-        let dir = unique_test_dir("tail-lines");
-        let conv = Conversation::new(&dir, "conversation.md", "test");
+        let dir = TestTempDir::new("tail-lines");
+        let conv = Conversation::new(dir.path(), "conversation.md", "test");
         conv.create_with_language(false)
             .expect("failed to create conversation file");
 
@@ -181,20 +216,19 @@ mod tests {
         for i in 0..20 {
             all_lines.push_str(&format!("line-{i}\n"));
         }
-        std::fs::write(dir.join("conversation.md"), all_lines).expect("failed to write test lines");
+        std::fs::write(dir.path().join("conversation.md"), all_lines)
+            .expect("failed to write test lines");
 
         let tail = conv.read_tail_lines(5).expect("failed to read tail lines");
         assert!(!tail.contains("line-0"));
         assert!(tail.contains("line-15"));
         assert!(tail.contains("line-19"));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn english_headers_are_written_when_localized() {
-        let dir = unique_test_dir("english-headers");
-        let conv = Conversation::new(&dir, "conversation.md", "test-project");
+        let dir = TestTempDir::new("english-headers");
+        let conv = Conversation::new(dir.path(), "conversation.md", "test-project");
         conv.create_with_language(true)
             .expect("failed to create english conversation file");
         conv.append_round_header_with_language(1, true)
@@ -202,13 +236,11 @@ mod tests {
         conv.append_consensus_with_language("All aligned.", true)
             .expect("failed to append english consensus");
 
-        let content = std::fs::read_to_string(dir.join("conversation.md"))
+        let content = std::fs::read_to_string(dir.path().join("conversation.md"))
             .expect("failed to read conversation");
         assert!(content.contains("# Code Review: test-project"));
         assert!(content.contains("## Review Session - "));
         assert!(content.contains("### Round 1"));
         assert!(content.contains("### Consensus Reached ✓"));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

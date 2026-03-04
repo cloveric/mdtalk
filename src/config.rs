@@ -66,7 +66,7 @@ fn default_agent_b() -> AgentConfig {
 }
 
 fn default_timeout() -> u64 {
-    600
+    900
 }
 fn default_max_rounds() -> u32 {
     1
@@ -311,18 +311,34 @@ impl MdtalkConfig {
 #[cfg(test)]
 mod tests {
     use super::MdtalkConfig;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn unique_test_dir(name: &str) -> PathBuf {
-        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("mdtalk-config-{name}-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("failed to create test dir");
-        dir
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new(name: &str) -> Self {
+            let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("mdtalk-config-{name}-{}-{id}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("failed to create test dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]
@@ -376,7 +392,7 @@ mod tests {
 
     #[test]
     fn project_loader_prefers_local_mdtalk_toml() {
-        let dir = unique_test_dir("load-local-toml");
+        let dir = TestTempDir::new("load-local-toml");
         let toml = r#"
 [project]
 path = "."
@@ -397,12 +413,12 @@ max_exchanges = 3
 output_file = "conversation.md"
 consensus_keywords = ["agree"]
 "#;
-        std::fs::write(dir.join("mdtalk.toml"), toml).expect("failed to write mdtalk.toml");
+        std::fs::write(dir.path().join("mdtalk.toml"), toml).expect("failed to write mdtalk.toml");
 
-        let cfg = MdtalkConfig::from_project_with_optional_config(dir.clone())
+        let cfg = MdtalkConfig::from_project_with_optional_config(dir.path().to_path_buf())
             .expect("project loader should read local mdtalk.toml");
 
-        assert_eq!(cfg.project.path, dir);
+        assert_eq!(cfg.project.path, dir.path().to_path_buf());
         assert_eq!(cfg.agent_a.timeout_secs, 901);
         assert_eq!(cfg.agent_b.timeout_secs, 902);
         assert_eq!(cfg.review.max_rounds, 2);
@@ -411,15 +427,15 @@ consensus_keywords = ["agree"]
 
     #[test]
     fn project_loader_falls_back_to_defaults_without_local_toml() {
-        let dir = unique_test_dir("load-defaults");
+        let dir = TestTempDir::new("load-defaults");
 
-        let cfg = MdtalkConfig::from_project_with_optional_config(dir.clone())
+        let cfg = MdtalkConfig::from_project_with_optional_config(dir.path().to_path_buf())
             .expect("project loader should fall back to defaults");
 
-        assert_eq!(cfg.project.path, dir);
+        assert_eq!(cfg.project.path, dir.path().to_path_buf());
         assert_eq!(cfg.agent_a.command, "claude");
         assert_eq!(cfg.agent_b.command, "codex");
-        assert_eq!(cfg.agent_a.timeout_secs, 600);
-        assert_eq!(cfg.agent_b.timeout_secs, 600);
+        assert_eq!(cfg.agent_a.timeout_secs, 900);
+        assert_eq!(cfg.agent_b.timeout_secs, 900);
     }
 }
