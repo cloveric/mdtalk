@@ -20,22 +20,33 @@ impl Conversation {
         }
     }
 
-    /// Create the conversation file with the initial header.
-    pub fn create(&self) -> Result<()> {
+    /// Create the conversation file with a localized header.
+    pub fn create_with_language(&self, en: bool) -> Result<()> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-        let header = format!("# 代码审查: {}\n## 审查会话 - {now}\n\n", self.project_name);
+        let header = if en {
+            format!(
+                "# Code Review: {}\n## Review Session - {now}\n\n",
+                self.project_name
+            )
+        } else {
+            format!("# 代码审查: {}\n## 审查会话 - {now}\n\n", self.project_name)
+        };
         std::fs::write(&self.path, &header)
             .with_context(|| format!("Failed to create conversation file {:?}", self.path))?;
         Ok(())
     }
 
-    /// Append a round header (### Round N). Called once per round.
-    pub fn append_round_header(&self, round: u32) -> Result<()> {
+    /// Append a localized round header.
+    pub fn append_round_header_with_language(&self, round: u32, en: bool) -> Result<()> {
         let mut file = OpenOptions::new()
             .append(true)
             .open(&self.path)
             .with_context(|| "Failed to open conversation file for append")?;
-        write!(file, "### 第{round}轮\n\n")?;
+        if en {
+            write!(file, "### Round {round}\n\n")?;
+        } else {
+            write!(file, "### 第{round}轮\n\n")?;
+        }
         Ok(())
     }
 
@@ -59,13 +70,17 @@ impl Conversation {
         Ok(())
     }
 
-    /// Append a consensus marker.
-    pub fn append_consensus(&self, summary: &str) -> Result<()> {
+    /// Append a localized consensus marker.
+    pub fn append_consensus_with_language(&self, summary: &str, en: bool) -> Result<()> {
         let mut file = OpenOptions::new()
             .append(true)
             .open(&self.path)
             .with_context(|| "Failed to open conversation file for append")?;
-        write!(file, "### 已达成共识 ✓\n\n{summary}\n\n")?;
+        if en {
+            write!(file, "### Consensus Reached ✓\n\n{summary}\n\n")?;
+        } else {
+            write!(file, "### 已达成共识 ✓\n\n{summary}\n\n")?;
+        }
         Ok(())
     }
 
@@ -99,7 +114,12 @@ impl Conversation {
 
 /// Append an apply-phase entry to `review_changelog.md` in the project directory.
 /// Creates the file with a header on first write.
-pub fn append_changelog(project_dir: &Path, round: u32, content: &str) -> Result<()> {
+pub fn append_changelog_with_language(
+    project_dir: &Path,
+    round: u32,
+    content: &str,
+    en: bool,
+) -> Result<()> {
     let path = project_dir.join("review_changelog.md");
     let needs_header = !path.exists();
 
@@ -110,14 +130,25 @@ pub fn append_changelog(project_dir: &Path, round: u32, content: &str) -> Result
         .with_context(|| format!("Failed to open changelog {:?}", path))?;
 
     if needs_header {
-        write!(file, "# MDTalk 代码修改记录\n\n")?;
+        if en {
+            write!(file, "# MDTalk Code Change Log\n\n")?;
+        } else {
+            write!(file, "# MDTalk 代码修改记录\n\n")?;
+        }
     }
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-    write!(
-        file,
-        "## 第{round}轮 代码修改 - {now}\n\n{content}\n\n---\n\n"
-    )?;
+    if en {
+        write!(
+            file,
+            "## Round {round} Code Changes - {now}\n\n{content}\n\n---\n\n"
+        )?;
+    } else {
+        write!(
+            file,
+            "## 第{round}轮 代码修改 - {now}\n\n{content}\n\n---\n\n"
+        )?;
+    }
 
     Ok(())
 }
@@ -143,7 +174,8 @@ mod tests {
     fn read_tail_lines_returns_latest_lines_only() {
         let dir = unique_test_dir("tail-lines");
         let conv = Conversation::new(&dir, "conversation.md", "test");
-        conv.create().expect("failed to create conversation file");
+        conv.create_with_language(false)
+            .expect("failed to create conversation file");
 
         let mut all_lines = String::new();
         for i in 0..20 {
@@ -155,6 +187,27 @@ mod tests {
         assert!(!tail.contains("line-0"));
         assert!(tail.contains("line-15"));
         assert!(tail.contains("line-19"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn english_headers_are_written_when_localized() {
+        let dir = unique_test_dir("english-headers");
+        let conv = Conversation::new(&dir, "conversation.md", "test-project");
+        conv.create_with_language(true)
+            .expect("failed to create english conversation file");
+        conv.append_round_header_with_language(1, true)
+            .expect("failed to append english round header");
+        conv.append_consensus_with_language("All aligned.", true)
+            .expect("failed to append english consensus");
+
+        let content = std::fs::read_to_string(dir.join("conversation.md"))
+            .expect("failed to read conversation");
+        assert!(content.contains("# Code Review: test-project"));
+        assert!(content.contains("## Review Session - "));
+        assert!(content.contains("### Round 1"));
+        assert!(content.contains("### Consensus Reached ✓"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

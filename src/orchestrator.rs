@@ -676,7 +676,7 @@ pub async fn run(
 
     // Create conversation file in the project directory
     let conversation = Conversation::new(&project_path, &config.review.output_file, &project_name);
-    conversation.create()?;
+    conversation.create_with_language(state.is_en())?;
 
     let agent_a = AgentRunner::new(&config.agent_a);
     let agent_b = AgentRunner::new(&config.agent_b);
@@ -726,7 +726,7 @@ pub async fn run(
 
             // Round header is written once for each outer round.
             if should_append_round_header(exchange) {
-                conversation.append_round_header(round)?;
+                conversation.append_round_header_with_language(round, state.is_en())?;
             }
 
             // --- Agent A reviews ---
@@ -895,7 +895,13 @@ pub async fn run(
                 } else {
                     format!("第{round}轮 讨论{exchange}: 达成共识")
                 });
-                conversation.append_consensus(&result.summary)?;
+                let summary = if state.is_en() {
+                    "Both agents explicitly expressed consensus via the configured keywords."
+                        .to_string()
+                } else {
+                    result.summary.clone()
+                };
+                conversation.append_consensus_with_language(&summary, state.is_en())?;
                 consensus_reached = true;
                 break;
             }
@@ -1061,9 +1067,12 @@ pub async fn run(
                         },
                         &output.content,
                     )?;
-                    if let Err(e) =
-                        crate::conversation::append_changelog(&project_path, round, &output.content)
-                    {
+                    if let Err(e) = crate::conversation::append_changelog_with_language(
+                        &project_path,
+                        round,
+                        &output.content,
+                        state.is_en(),
+                    ) {
                         state.log(&if state.is_en() {
                             format!("Failed to write review_changelog.md: {e}")
                         } else {
