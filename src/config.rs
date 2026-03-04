@@ -119,6 +119,8 @@ pub const AGENT_PRESETS: &[&str] = &["claude", "codex", "gemini"];
 pub struct StartConfig {
     pub agent_a_command: String,
     pub agent_b_command: String,
+    pub agent_a_timeout_secs: u64,
+    pub agent_b_timeout_secs: u64,
     pub max_rounds: u32,
     pub max_exchanges: u32,
     pub auto_apply: bool,
@@ -132,8 +134,10 @@ impl MdtalkConfig {
     pub fn apply_start_config(&mut self, sc: StartConfig) {
         self.agent_a.name = sc.agent_a_command.clone();
         self.agent_a.command = sc.agent_a_command;
+        self.agent_a.timeout_secs = sc.agent_a_timeout_secs;
         self.agent_b.name = sc.agent_b_command.clone();
         self.agent_b.command = sc.agent_b_command;
+        self.agent_b.timeout_secs = sc.agent_b_timeout_secs;
         self.review.max_rounds = sc.max_rounds;
         self.review.max_exchanges = sc.max_exchanges;
     }

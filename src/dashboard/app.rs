@@ -3,6 +3,12 @@ use tokio::sync::{mpsc, oneshot};
 use crate::config::{AGENT_PRESETS, StartConfig};
 use crate::orchestrator::{OrchestratorCommand, OrchestratorState};
 
+const TIMEOUT_MIN_SECS: u64 = 60;
+const TIMEOUT_MAX_SECS: u64 = 7200;
+const TIMEOUT_STEP_SECS: u64 = 60;
+const START_FIELD_COUNT: usize = 10;
+const START_LAST_FIELD: usize = START_FIELD_COUNT - 1;
+
 pub struct DashboardApp {
     pub state: OrchestratorState,
     pub scroll_offset: u16,
@@ -18,6 +24,8 @@ pub struct DashboardApp {
     pub agent_presets: Vec<String>,
     pub agent_a_idx: usize,
     pub agent_b_idx: usize,
+    pub edit_agent_a_timeout_secs: u64,
+    pub edit_agent_b_timeout_secs: u64,
     pub edit_rounds: u32,
     pub edit_exchanges: u32,
     pub auto_apply: bool,
@@ -45,6 +53,12 @@ impl DashboardApp {
 
         let edit_rounds = initial_state.max_rounds;
         let edit_exchanges = initial_state.max_exchanges;
+        let edit_agent_a_timeout_secs = initial_state
+            .agent_a_timeout_secs
+            .clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
+        let edit_agent_b_timeout_secs = initial_state
+            .agent_b_timeout_secs
+            .clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
 
         Self {
             state: initial_state,
@@ -59,6 +73,8 @@ impl DashboardApp {
             agent_presets: presets,
             agent_a_idx,
             agent_b_idx,
+            edit_agent_a_timeout_secs,
+            edit_agent_b_timeout_secs,
             edit_rounds,
             edit_exchanges,
             auto_apply: true,
@@ -73,13 +89,13 @@ impl DashboardApp {
         if self.selected_field > 0 {
             self.selected_field -= 1;
         } else {
-            self.selected_field = 7;
+            self.selected_field = START_LAST_FIELD;
         }
     }
 
     /// Move selection to next field.
     pub fn select_next(&mut self) {
-        if self.selected_field < 7 {
+        if self.selected_field < START_LAST_FIELD {
             self.selected_field += 1;
         } else {
             self.selected_field = 0;
@@ -91,25 +107,37 @@ impl DashboardApp {
         let n = self.agent_presets.len();
         match self.selected_field {
             0 => self.agent_a_idx = (self.agent_a_idx + n - 1) % n,
-            1 => self.agent_b_idx = (self.agent_b_idx + n - 1) % n,
-            2 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
-            3 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
-            4 => self.auto_apply = !self.auto_apply,
-            5 => {
+            1 => {
+                self.edit_agent_a_timeout_secs = self
+                    .edit_agent_a_timeout_secs
+                    .saturating_sub(TIMEOUT_STEP_SECS)
+                    .max(TIMEOUT_MIN_SECS)
+            }
+            2 => self.agent_b_idx = (self.agent_b_idx + n - 1) % n,
+            3 => {
+                self.edit_agent_b_timeout_secs = self
+                    .edit_agent_b_timeout_secs
+                    .saturating_sub(TIMEOUT_STEP_SECS)
+                    .max(TIMEOUT_MIN_SECS)
+            }
+            4 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
+            5 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
+            6 => self.auto_apply = !self.auto_apply,
+            7 => {
                 self.apply_level = if self.apply_level <= 1 {
                     3
                 } else {
                     self.apply_level - 1
                 }
             }
-            6 => {
+            8 => {
                 self.language = if self.language == "en" {
                     "zh".to_string()
                 } else {
                     "en".to_string()
                 }
             }
-            7 => self.branch_mode = !self.branch_mode,
+            9 => self.branch_mode = !self.branch_mode,
             _ => {}
         }
     }
@@ -119,25 +147,33 @@ impl DashboardApp {
         let n = self.agent_presets.len();
         match self.selected_field {
             0 => self.agent_a_idx = (self.agent_a_idx + 1) % n,
-            1 => self.agent_b_idx = (self.agent_b_idx + 1) % n,
-            2 => self.edit_rounds = (self.edit_rounds + 1).min(10),
-            3 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
-            4 => self.auto_apply = !self.auto_apply,
-            5 => {
+            1 => {
+                self.edit_agent_a_timeout_secs =
+                    (self.edit_agent_a_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
+            }
+            2 => self.agent_b_idx = (self.agent_b_idx + 1) % n,
+            3 => {
+                self.edit_agent_b_timeout_secs =
+                    (self.edit_agent_b_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
+            }
+            4 => self.edit_rounds = (self.edit_rounds + 1).min(10),
+            5 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
+            6 => self.auto_apply = !self.auto_apply,
+            7 => {
                 self.apply_level = if self.apply_level >= 3 {
                     1
                 } else {
                     self.apply_level + 1
                 }
             }
-            6 => {
+            8 => {
                 self.language = if self.language == "en" {
                     "zh".to_string()
                 } else {
                     "en".to_string()
                 }
             }
-            7 => self.branch_mode = !self.branch_mode,
+            9 => self.branch_mode = !self.branch_mode,
             _ => {}
         }
     }
@@ -148,6 +184,8 @@ impl DashboardApp {
             let sc = StartConfig {
                 agent_a_command: self.agent_presets[self.agent_a_idx].clone(),
                 agent_b_command: self.agent_presets[self.agent_b_idx].clone(),
+                agent_a_timeout_secs: self.edit_agent_a_timeout_secs,
+                agent_b_timeout_secs: self.edit_agent_b_timeout_secs,
                 max_rounds: self.edit_rounds,
                 max_exchanges: self.edit_exchanges,
                 auto_apply: self.auto_apply,

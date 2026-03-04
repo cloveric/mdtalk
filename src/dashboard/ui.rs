@@ -35,7 +35,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title
-            Constraint::Min(9),    // Config form
+            Constraint::Min(11),   // Config form
             Constraint::Length(3), // Action hint
         ])
         .split(area);
@@ -50,10 +50,12 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Interactive config form — 7 fields
+    // Interactive config form — 10 fields
     let labels = [
         "  Agent A:     ",
+        "  A Timeout:   ",
         "  Agent B:     ",
+        "  B Timeout:   ",
         "  Rounds:      ",
         "  Exchanges:   ",
         "  Auto Apply:  ",
@@ -61,9 +63,11 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         "  Language:    ",
         "  Branch Mode: ",
     ];
-    let values: [String; 8] = [
+    let values: [String; 10] = [
         app.agent_presets[app.agent_a_idx].clone(),
+        format!("{}s", app.edit_agent_a_timeout_secs),
         app.agent_presets[app.agent_b_idx].clone(),
+        format!("{}s", app.edit_agent_b_timeout_secs),
         format!("{}", app.edit_rounds),
         format!("{}", app.edit_exchanges),
         if app.auto_apply {
@@ -92,7 +96,9 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     let selected_bg = Style::default().bg(Color::DarkGray).fg(Color::White);
     let value_colors = [
         Color::Cyan,
+        Color::White,
         Color::Magenta,
+        Color::White,
         Color::White,
         Color::White,
         Color::Yellow,
