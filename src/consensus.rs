@@ -47,6 +47,10 @@ fn is_clause_boundary(ch: char) -> bool {
     )
 }
 
+fn is_sentence_boundary(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?' | ';' | '\n' | '。' | '！' | '？' | '；')
+}
+
 fn has_recent_english_negation(preceding: &str) -> bool {
     let tokens: Vec<&str> = preceding
         .split(|ch: char| !(ch.is_ascii_alphabetic() || ch == '\''))
@@ -77,6 +81,23 @@ fn is_negated_context(preceding: &str) -> bool {
     has_recent_english_negation(preceding) || has_recent_chinese_negation(preceding)
 }
 
+/// Check if preceding text contains a partial-agreement qualifier ("部分"/"partially").
+/// Used in full-only checks to reject "部分成立" as full agreement.
+fn has_partial_qualifier(preceding: &str) -> bool {
+    let tail: String = preceding
+        .chars()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    tail.contains("部分")
+        || tail
+            .split(|ch: char| !ch.is_ascii_alphabetic())
+            .any(|w| w.eq_ignore_ascii_case("partially"))
+}
+
 fn has_english_turning_word(text: &str) -> bool {
     text.split(|ch: char| !(ch.is_ascii_alphabetic() || ch == '\''))
         .filter(|token| !token.is_empty())
@@ -90,17 +111,35 @@ fn has_chinese_turning_word(text: &str) -> bool {
 }
 
 fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) -> bool {
-    let mut context_end = (keyword_end + 120).min(text_lower.len());
+    let mut context_end = (keyword_end + 200).min(text_lower.len());
     while context_end > keyword_end && !text_lower.is_char_boundary(context_end) {
         context_end -= 1;
     }
-    let following = &text_lower[keyword_end..context_end];
-    let clause_end = following
-        .char_indices()
-        .find(|(_, ch)| matches!(ch, '.' | '!' | '?' | ';' | '\n' | '。' | '！' | '？' | '；'))
-        .map_or(following.len(), |(idx, _)| idx);
-    let local_following = following[..clause_end].trim_start();
-    has_english_turning_word(local_following) || has_chinese_turning_word(local_following)
+    let following = text_lower[keyword_end..context_end].trim_start();
+    let mut sentence_start = 0usize;
+    let mut inspected_sentences = 0usize;
+
+    for (idx, ch) in following.char_indices() {
+        if !is_sentence_boundary(ch) {
+            continue;
+        }
+        let sentence = following[sentence_start..idx].trim_start();
+        if has_english_turning_word(sentence) || has_chinese_turning_word(sentence) {
+            return true;
+        }
+        inspected_sentences += 1;
+        if inspected_sentences >= 2 {
+            return false;
+        }
+        sentence_start = idx + ch.len_utf8();
+    }
+
+    if inspected_sentences < 2 {
+        let tail = following[sentence_start..].trim_start();
+        return has_english_turning_word(tail) || has_chinese_turning_word(tail);
+    }
+
+    false
 }
 
 /// Check if a keyword appears in the text in an affirmative context.
@@ -149,7 +188,10 @@ fn has_affirmative_keyword(text: &str, keyword: &str, require_unambiguous: bool)
         let has_turning =
             require_unambiguous && has_turning_word_in_following_clause(&text_lower, abs_end);
 
-        if !negated && !has_turning {
+        let is_partial =
+            require_unambiguous && has_partial_qualifier(local_preceding);
+
+        if !negated && !has_turning && !is_partial {
             return true;
         }
 
@@ -370,6 +412,35 @@ mod tests {
     }
 
     #[test]
+    fn full_only_rejects_partial_qualifier_chinese() {
+        // "部分成立" should NOT count as full agreement
+        let kws = vec!["成立".into(), "同意".into()];
+        let r = check_b_full_only(
+            "1. 【部分成立】UTF-8 字节切片确实可能 panic。\n2. 【不成立】当前代码已无该问题。",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_partially_qualifier_english() {
+        let kws = vec!["agree".into()];
+        let r = check_b_full_only("I partially agree with the review findings.", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn b_only_accepts_partial_qualifier() {
+        // check_b_only (last exchange) should still accept "部分成立"
+        let kws = vec!["成立".into()];
+        let r = check_b_only(
+            "1. 【部分成立】问题存在但不严重。\n2. 【成立】确认该 bug。",
+            &kws,
+        );
+        assert!(r.reached);
+    }
+
+    #[test]
     fn full_only_rejects_turning_word_after_affirmative_while() {
         let kws = vec!["agree".into()];
         let r = check_b_full_only(
@@ -383,6 +454,23 @@ mod tests {
     fn full_only_rejects_turning_word_after_affirmative_except() {
         let kws = vec!["agree".into()];
         let r = check_b_full_only("I agree, except point 4 still looks incorrect.", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_cross_sentence_turning_word_english() {
+        let kws = vec!["agree".into()];
+        let r = check_b_full_only(
+            "I agree with all items. But point 4 is still incorrect.",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_cross_sentence_turning_word_chinese() {
+        let kws = vec!["同意".into()];
+        let r = check_b_full_only("我同意所有建议。但是第4条仍然不正确。", &kws);
         assert!(!r.reached);
     }
 

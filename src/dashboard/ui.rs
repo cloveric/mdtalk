@@ -58,6 +58,22 @@ fn style_conversation_line(line: &str, kind: MarkdownLineKind) -> Line<'static> 
     }
 }
 
+pub fn conversation_visible_lines_for_area(area: Rect) -> u16 {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),               // Status bar
+            Constraint::Min(10),                 // Content area
+            Constraint::Length(LOG_AREA_HEIGHT), // Log area
+        ])
+        .split(area);
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(chunks[1]);
+    content_chunks[0].height.saturating_sub(2).max(1)
+}
+
 pub fn draw(f: &mut Frame, app: &DashboardApp) {
     if app.waiting_for_start {
         draw_start_screen(f, app);
@@ -219,6 +235,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
 fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let state = &app.state;
     let en = state.language == "en";
+    let has_error = state.error_message.is_some();
 
     let elapsed = state
         .session_start
@@ -241,7 +258,13 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
         Phase::WaitingForApply => Color::Yellow,
         Phase::ApplyChanges => Color::Green,
         Phase::WaitingForMerge => Color::Yellow,
-        Phase::Done => Color::Green,
+        Phase::Done => {
+            if has_error {
+                Color::Red
+            } else {
+                Color::Green
+            }
+        }
     };
 
     let phase_text = if en {
@@ -253,7 +276,13 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Phase::WaitingForApply => "Waiting for apply".to_string(),
             Phase::ApplyChanges => format!("Agent B ({}) applying", state.agent_b_name),
             Phase::WaitingForMerge => "Waiting for merge".to_string(),
-            Phase::Done => "Done".to_string(),
+            Phase::Done => {
+                if has_error {
+                    "Error".to_string()
+                } else {
+                    "Done".to_string()
+                }
+            }
         }
     } else {
         match state.phase {
@@ -264,7 +293,13 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Phase::WaitingForApply => "等待确认修改".to_string(),
             Phase::ApplyChanges => format!("Agent B ({}) 修改代码中", state.agent_b_name),
             Phase::WaitingForMerge => "等待合并".to_string(),
-            Phase::Done => "已完成".to_string(),
+            Phase::Done => {
+                if has_error {
+                    "异常退出".to_string()
+                } else {
+                    "已完成".to_string()
+                }
+            }
         }
     };
 
@@ -544,7 +579,9 @@ fn draw_logs(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarkdownLineKind, classify_markdown_line};
+    use ratatui::layout::Rect;
+
+    use super::{MarkdownLineKind, classify_markdown_line, conversation_visible_lines_for_area};
 
     #[test]
     fn markdown_heading_is_detected_outside_code_block() {
@@ -569,5 +606,17 @@ mod tests {
         let (kind, in_code_block) = classify_markdown_line("## heading", in_code_block);
         assert_eq!(kind, MarkdownLineKind::HeadingLevel1Or2);
         assert!(!in_code_block);
+    }
+
+    #[test]
+    fn visible_conversation_lines_follow_layout() {
+        let visible = conversation_visible_lines_for_area(Rect::new(0, 0, 80, 24));
+        assert_eq!(visible, 12);
+    }
+
+    #[test]
+    fn visible_conversation_lines_has_non_zero_floor() {
+        let visible = conversation_visible_lines_for_area(Rect::new(0, 0, 80, 8));
+        assert!(visible >= 1);
     }
 }

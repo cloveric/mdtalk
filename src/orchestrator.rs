@@ -510,6 +510,7 @@ pub struct OrchestratorState {
     pub logs: Vec<String>,
     pub conversation_preview: String,
     pub finished: bool,
+    pub error_message: Option<String>,
     pub language: String,
     pub review_branch: Option<String>,
     pub original_branch: Option<String>,
@@ -602,6 +603,16 @@ fn finalize_session_state(
     state.finished = true;
     state.update_preview(conversation);
     let _ = state_tx.send(state.clone());
+}
+
+fn finalize_session_error_state(
+    state: &mut OrchestratorState,
+    conversation: &Conversation,
+    state_tx: &watch::Sender<OrchestratorState>,
+    err: &anyhow::Error,
+) {
+    state.error_message = Some(err.to_string());
+    finalize_session_state(state, conversation, state_tx);
 }
 
 macro_rules! i18n {
@@ -1143,6 +1154,7 @@ impl OrchestratorState {
             logs: Vec::new(),
             conversation_preview: String::new(),
             finished: false,
+            error_message: None,
             language: "zh".to_string(),
             review_branch: None,
             original_branch: None,
@@ -1336,7 +1348,7 @@ pub async fn run(
 
         if let Some(err) = execution_error {
             expose_branch_info(&mut state, &review_branch, &original_branch);
-            finalize_session_state(&mut state, &conversation, &state_tx);
+            finalize_session_error_state(&mut state, &conversation, &state_tx, &err);
             return Err(err);
         }
 
@@ -1384,7 +1396,7 @@ pub async fn run(
             Ok(outcome) => outcome,
             Err(err) => {
                 expose_branch_info(&mut state, &review_branch, &original_branch);
-                finalize_session_state(&mut state, &conversation, &state_tx);
+                finalize_session_error_state(&mut state, &conversation, &state_tx, &err);
                 return Err(err);
             }
         };
@@ -1431,7 +1443,7 @@ pub async fn run(
     )
     .await
     {
-        finalize_session_state(&mut state, &conversation, &state_tx);
+        finalize_session_error_state(&mut state, &conversation, &state_tx, &err);
         return Err(err);
     }
 
@@ -1457,7 +1469,7 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        ExchangeKind, OrchestratorState, build_agent_a_prompt, build_agent_b_prompt,
+        ExchangeKind, OrchestratorState, Phase, build_agent_a_prompt, build_agent_b_prompt,
         build_apply_prompt, classify_exchange, git_commit_filtered, run,
         should_append_round_header,
     };
@@ -1668,12 +1680,19 @@ mod tests {
         let fail_cmd = script_always_fail(&project_dir, "agent_a_fail");
         let ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
         let cfg = test_config(project_dir.clone(), fail_cmd, ok_cmd);
-        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
 
         let result = run(cfg, state_tx, true, 1, None, None).await;
         assert!(
             result.is_err(),
             "Agent A execution failure should return Err"
+        );
+
+        let final_state = state_rx.borrow().clone();
+        assert_eq!(final_state.phase, Phase::Done);
+        assert!(
+            final_state.error_message.is_some(),
+            "dashboard state should expose execution failure context"
         );
     }
 

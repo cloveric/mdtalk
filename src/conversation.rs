@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::ErrorKind;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -91,21 +89,48 @@ impl Conversation {
             return Ok(String::new());
         }
 
-        let file = std::fs::File::open(&self.path)
+        let mut file = std::fs::File::open(&self.path)
             .with_context(|| format!("Failed to open conversation file {:?}", self.path))?;
-        let reader = BufReader::new(file);
-        let mut tail = VecDeque::with_capacity(max_lines);
-
-        for line in reader.lines() {
-            let line =
-                line.with_context(|| format!("Failed to read conversation file {:?}", self.path))?;
-            if tail.len() == max_lines {
-                tail.pop_front();
-            }
-            tail.push_back(line);
+        let file_len = file
+            .metadata()
+            .with_context(|| format!("Failed to stat conversation file {:?}", self.path))?
+            .len();
+        if file_len == 0 {
+            return Ok(String::new());
         }
 
-        let mut output = tail.into_iter().collect::<Vec<_>>().join("\n");
+        const TAIL_READ_CHUNK_BYTES: usize = 4096;
+        let mut pos = file_len;
+        let mut newline_count = 0usize;
+        let mut total_len = 0usize;
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+
+        // Read from file end until we have enough newline boundaries
+        // to reconstruct the last `max_lines` lines.
+        while pos > 0 && newline_count <= max_lines {
+            let read_len = TAIL_READ_CHUNK_BYTES.min(pos as usize);
+            pos -= read_len as u64;
+            file.seek(SeekFrom::Start(pos))
+                .with_context(|| format!("Failed to seek conversation file {:?}", self.path))?;
+
+            let mut chunk = vec![0u8; read_len];
+            file.read_exact(&mut chunk)
+                .with_context(|| format!("Failed to read conversation file {:?}", self.path))?;
+            newline_count += chunk.iter().filter(|&&b| b == b'\n').count();
+            total_len += chunk.len();
+            chunks.push(chunk);
+        }
+
+        chunks.reverse();
+        let mut bytes = Vec::with_capacity(total_len);
+        for chunk in chunks {
+            bytes.extend_from_slice(&chunk);
+        }
+
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(max_lines);
+        let mut output = lines[start..].join("\n");
         if !output.is_empty() {
             output.push('\n');
         }
@@ -122,34 +147,14 @@ pub fn append_changelog_with_language(
     en: bool,
 ) -> Result<()> {
     let path = project_dir.join("review_changelog.md");
+    let is_new_file = !path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("Failed to open changelog {:?}", path))?;
 
-    let mut wrote_header = false;
-    let mut file = loop {
-        match OpenOptions::new().create_new(true).append(true).open(&path) {
-            Ok(file) => {
-                wrote_header = true;
-                break file;
-            }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                match OpenOptions::new().append(true).open(&path) {
-                    Ok(file) => break file,
-                    Err(open_err) if open_err.kind() == ErrorKind::NotFound => {
-                        // File disappeared between create_new and open; retry.
-                        continue;
-                    }
-                    Err(open_err) => {
-                        return Err(open_err)
-                            .with_context(|| format!("Failed to open changelog {:?}", path));
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(e).with_context(|| format!("Failed to create changelog {:?}", path));
-            }
-        }
-    };
-
-    if wrote_header {
+    if is_new_file {
         if en {
             write!(file, "# MDTalk Code Change Log\n\n")?;
         } else {
@@ -175,7 +180,7 @@ pub fn append_changelog_with_language(
 
 #[cfg(test)]
 mod tests {
-    use super::Conversation;
+    use super::{Conversation, append_changelog_with_language};
     use crate::test_utils::TestTempDir;
 
     #[test]
@@ -215,5 +220,20 @@ mod tests {
         assert!(content.contains("## Review Session - "));
         assert!(content.contains("### Round 1"));
         assert!(content.contains("### Consensus Reached ✓"));
+    }
+
+    #[test]
+    fn changelog_header_is_only_written_once() {
+        let dir = TestTempDir::new("conversation", "changelog-header-once");
+        append_changelog_with_language(dir.path(), 1, "change 1", true)
+            .expect("failed to append first changelog entry");
+        append_changelog_with_language(dir.path(), 2, "change 2", true)
+            .expect("failed to append second changelog entry");
+
+        let content = std::fs::read_to_string(dir.path().join("review_changelog.md"))
+            .expect("failed to read changelog file");
+        assert_eq!(content.matches("# MDTalk Code Change Log").count(), 1);
+        assert!(content.contains("## Round 1 Code Changes"));
+        assert!(content.contains("## Round 2 Code Changes"));
     }
 }

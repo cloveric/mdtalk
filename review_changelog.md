@@ -190,3 +190,44 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 20:43:49
+
+已按 `conversation.md` 的共识，优先处理了高优先级与中优先级问题，并直接改了代码。
+
+**已修复（高优先级）**
+1. 跨句转折词漏检（`I agree. But ...`）  
+- 扩展了关键词后文检测逻辑：不只看当前句，还检查后续短窗口内的下一句。  
+- 位置：[consensus.rs](C:/Users/hangw/mdtalk/src/consensus.rs:96)  
+- 新增回归测试：[consensus.rs](C:/Users/hangw/mdtalk/src/consensus.rs:412)
+
+2. 执行失败后 Dashboard 无法区分“正常结束/异常结束”  
+- 在状态里新增 `error_message: Option<String>`，并在错误返回路径统一写入后再 `Done`。  
+- Dashboard 状态栏在 `Done + error_message` 时显示错误态（红色，`Error/异常退出`）。  
+- 位置：[orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:513)、[orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:608)、[dashboard/ui.rs](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:238)  
+- 新增测试：[orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:1677)
+
+**已修复（中优先级）**
+1. `read_tail_lines` 每次全量读文件  
+- 改为从文件尾部按块反向读取，读到足够行数即停止。  
+- 位置：[conversation.rs](C:/Users/hangw/mdtalk/src/conversation.rs:87)
+
+2. `append_changelog_with_language` 竞态重试循环复杂度过高  
+- 简化为：判断新文件 -> `create(true)+append(true)` -> 首次写 header。  
+- 位置：[conversation.rs](C:/Users/hangw/mdtalk/src/conversation.rs:143)  
+- 新增测试：[conversation.rs](C:/Users/hangw/mdtalk/src/conversation.rs:226)
+
+3. Dashboard 可见行数计算硬编码  
+- 抽成基于实际布局的计算函数，避免 `10/2` 魔数与 UI 布局漂移。  
+- 位置：[dashboard/ui.rs](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:61)、[dashboard/mod.rs](C:/Users/hangw/mdtalk/src/dashboard/mod.rs:103)  
+- 新增测试：[dashboard/ui.rs](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:612)
+
+**验证**
+- 已执行：`cargo fmt`
+- 已执行：`cargo test`
+- 结果：`61 passed; 0 failed`
+
+本轮按你的要求未处理低优先级项。若你要，我下一步可以继续处理中优先级里尚未动的两项（`OrchestratorState clone` 开销、自定义 command 的 Discussion/Apply 隔离）。
+
+
+---
+

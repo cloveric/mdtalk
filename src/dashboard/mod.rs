@@ -98,8 +98,9 @@ fn run_dashboard_loop(
 
     loop {
         let terminal_area = terminal.size()?;
-        let content_height = terminal_area.height.saturating_sub(10);
-        let conversation_visible_lines = content_height.saturating_sub(2);
+        let terminal_rect =
+            ratatui::layout::Rect::new(0, 0, terminal_area.width, terminal_area.height);
+        let conversation_visible_lines = ui::conversation_visible_lines_for_area(terminal_rect);
         app.set_conversation_visible_lines(conversation_visible_lines);
 
         // Draw
@@ -223,6 +224,7 @@ wait() 后读取 stdout/stderr 可能因管道缓冲区满而死锁。
 ---"
         .to_string(),
         finished: false,
+        error_message: None,
         review_branch: None,
         original_branch: None,
     };
