@@ -16,9 +16,14 @@ use tracing::info;
 #[derive(Parser, Debug)]
 #[command(
     name = "mdtalk",
-    about = "Multi-agent code review via Markdown conversation"
+    about = "Multi-agent code review via Markdown conversation",
+    disable_version_flag = true
 )]
 struct Cli {
+    /// Print version/build information and executable path
+    #[arg(short = 'V', long = "version", action = clap::ArgAction::SetTrue)]
+    version: bool,
+
     /// Path to the project to review
     #[arg(short, long)]
     project: Option<PathBuf>,
@@ -60,9 +65,27 @@ struct Cli {
     demo: bool,
 }
 
+fn print_version_info() {
+    let git_commit = option_env!("MDTALK_GIT_COMMIT").unwrap_or("unknown");
+    let build_unix = option_env!("MDTALK_BUILD_UNIX").unwrap_or("unknown");
+    let exe_path = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    println!("mdtalk {}", env!("CARGO_PKG_VERSION"));
+    println!("git_commit: {git_commit}");
+    println!("build_unix: {build_unix}");
+    println!("executable: {exe_path}");
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.version {
+        print_version_info();
+        return Ok(());
+    }
 
     if cli.demo {
         return dashboard::render_demo();

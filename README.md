@@ -117,9 +117,15 @@ MDTalk uses a **two-layer loop**:
 > Use `--project <path>` or `--config <path>`.  
 > When using `--project`, MDTalk auto-loads `<project>/mdtalk.toml` if it exists.
 
+**For users (stable install from a release tag):**
+```bash
+cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
+```
+
+**For contributors (run local source):**
 ```bash
 git clone https://github.com/cloveric/mdtalk && cd mdtalk
-cargo install --path .
+cargo run -- --project .
 ```
 
 ```bash
@@ -143,6 +149,12 @@ mdtalk --config ./mdtalk.toml
 
 # Preview the TUI layout
 mdtalk --demo
+```
+
+If behavior looks outdated, verify your active binary and build metadata:
+```bash
+where mdtalk
+mdtalk --version
 ```
 
 <br>
@@ -188,6 +200,7 @@ consensus_keywords = [
 mdtalk [OPTIONS]
 
 Options:
+  -V, --version               Print version/build information and executable path
   -p, --project <PATH>        Project directory to review
   -c, --config <FILE>         Path to mdtalk.toml
   --agent-a <CMD>         Agent A command (default: claude)
@@ -354,9 +367,15 @@ If this project saved you from a production bug, consider giving it a ⭐
 
 **前置条件：** [Rust](https://rustup.rs/) 1.75+，至少一个 AI CLI（[Claude Code](https://claude.ai/download)、[Codex](https://github.com/openai/codex) 等）。
 
+**普通用户（推荐：按发布 tag 安装稳定版）**
+```bash
+cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
+```
+
+**开发者（本地源码运行）**
 ```bash
 git clone https://github.com/cloveric/mdtalk && cd mdtalk
-cargo install --path .
+cargo run -- --project .
 ```
 
 ```bash
@@ -371,6 +390,12 @@ mdtalk --demo                                    # 预览 TUI 布局
 
 > 现在需显式传入 `--project` 或 `--config`。  
 > 使用 `--project` 时，会自动读取该项目目录下的 `mdtalk.toml`（若存在）。
+
+如果行为看起来不对（像在跑旧版本），先检查当前命中的可执行文件与构建信息：
+```bash
+where mdtalk
+mdtalk --version
+```
 
 ### ⚙️ 参数说明（新增）
 

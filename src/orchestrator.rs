@@ -293,6 +293,141 @@ fn should_append_round_header(exchange: u32) -> bool {
     exchange == 1
 }
 
+fn build_agent_a_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bool) -> String {
+    if en {
+        return match exchange_kind {
+            ExchangeKind::InitialReview => "You are participating in a multi-agent code review workflow. \
+Please thoroughly read the project's source files (src/ directory) and provide a detailed review, including:\n\
+- Potential bugs and logic errors\n\
+- Code quality issues\n\
+- Architecture/design issues\n\
+- Improvement suggestions\n\n\
+Prioritize findings by severity."
+                .to_string(),
+            ExchangeKind::RoundReReview => format!(
+                "You are participating in a multi-agent code review workflow. \
+Code was modified after the previous round. \
+First read the full review history in {conv_filename}, then re-review src/ to verify previously identified issues are fixed and to detect any newly introduced issues."
+            ),
+            ExchangeKind::FollowUp => format!(
+                "You are participating in a multi-agent code review workflow. \
+First read the full conversation history in {conv_filename}.\n\n\
+Then continue the discussion based on Agent B's latest response. \
+State whether you agree and provide further thoughts. \
+If you fully agree with the other side, explicitly say \"I agree\" or \"consensus reached\"."
+            ),
+        };
+    }
+
+    match exchange_kind {
+        ExchangeKind::InitialReview => "你正在参与一个多 agent 代码审查流程。\
+请仔细阅读当前项目的所有源代码文件（src/ 目录），然后给出详细的审查意见，包括：\n\
+- 潜在的 bug 和逻辑错误\n\
+- 代码质量问题\n\
+- 架构设计问题\n\
+- 改进建议\n\n\
+请按优先级排列你的发现。"
+            .to_string(),
+        ExchangeKind::RoundReReview => format!(
+            "你正在参与一个多 agent 代码审查流程。\
+上一轮审查后代码已被修改。\
+请先阅读当前目录下的 {conv_filename} 文件了解完整的审查对话历史，\
+然后重新审查 src/ 目录下的源代码，检查之前发现的问题是否已修复，\
+以及是否引入了新问题。给出你的审查意见。"
+        ),
+        ExchangeKind::FollowUp => format!(
+            "你正在参与一个多 agent 代码审查流程。\
+请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
+然后根据 Agent B 的最新反馈继续讨论。\
+表达你是否同意以及你的进一步看法。\
+如果你已完全同意对方观点，请明确说 \"I agree\" 或 \"达成一致\"。"
+        ),
+    }
+}
+
+fn build_agent_b_prompt(conv_filename: &str, en: bool) -> String {
+    if en {
+        return format!(
+            "You are an independent code review expert. Verify each finding recorded in '{conv_filename}'.\n\n\
+Steps:\n\
+1. Read '{conv_filename}' and list all findings from the other reviewer\n\
+2. Open the related source files and verify each finding against actual code\n\
+3. Output your complete review response directly in this format:\n\
+   - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
+   - Add any missed issues\n\
+   - End with a summary; if you agree overall, explicitly write \"I agree\" or \"consensus\"\n\n\
+Important: output the full review content directly; do not only report which files you read."
+        );
+    }
+
+    format!(
+        "你是一位独立的代码审查专家。你的任务是对 '{conv_filename}' 中记录的代码审查意见进行逐条验证。\n\n\
+具体步骤：\n\
+1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
+2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
+3. 直接输出你的完整审查回应，格式如下：\n\
+   - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
+   - 补充任何审查者遗漏的新问题\n\
+   - 在最后给出总结，如果你整体同意，请明确写 \"I agree\" 或 \"同意\"\n\n\
+重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
+    )
+}
+
+fn build_apply_instruction(apply_level: u32, en: bool) -> &'static str {
+    if en {
+        return match apply_level {
+            2 => {
+                "fix high- and medium-priority agreed issues by editing the relevant source files directly; skip low-priority issues"
+            }
+            3 => "fix all agreed issues by editing the relevant source files directly",
+            _ => {
+                "fix high-priority agreed issues by editing the relevant source files directly; skip medium/low-priority issues"
+            }
+        };
+    }
+
+    match apply_level {
+        2 => {
+            "选择高优先级和中优先级问题，阅读相关的源代码文件并直接修改代码来修复这些问题。低优先级问题暂不处理。"
+        }
+        3 => "修复所有已达成共识的问题，阅读相关的源代码文件并直接修改代码。",
+        _ => {
+            "选择所有高优先级问题，阅读相关的源代码文件并直接修改代码来修复。中低优先级问题暂不处理。"
+        }
+    }
+}
+
+fn build_apply_prompt(conv_filename: &str, apply_level: u32, en: bool) -> String {
+    let apply_instruction = build_apply_instruction(apply_level, en);
+    if en {
+        return format!(
+            "Consensus has been reached. First read the full review conversation in {conv_filename}, \
+then {apply_instruction}."
+        );
+    }
+
+    format!(
+        "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
+然后根据讨论中达成一致的改进意见，{apply_instruction}"
+    )
+}
+
+fn discussion_role_label(exchange_kind: ExchangeKind, en: bool) -> &'static str {
+    if en {
+        return match exchange_kind {
+            ExchangeKind::InitialReview => "Initial Review",
+            ExchangeKind::RoundReReview => "Re-Review",
+            ExchangeKind::FollowUp => "Follow-Up Discussion",
+        };
+    }
+
+    match exchange_kind {
+        ExchangeKind::InitialReview => "初始审查",
+        ExchangeKind::RoundReReview => "重新审查",
+        ExchangeKind::FollowUp => "后续讨论",
+    }
+}
+
 /// The state visible to the dashboard.
 #[derive(Debug, Clone)]
 pub struct OrchestratorState {
@@ -527,7 +662,14 @@ pub async fn run(
                 let _ = state_tx.send(state.clone());
             }
             None => {
-                anyhow::bail!("分支模式: 当前目录不是 git 仓库，无法创建隔离分支");
+                anyhow::bail!(
+                    "{}",
+                    if state.is_en() {
+                        "Branch mode: current directory is not a git repository; cannot create isolated branch"
+                    } else {
+                        "分支模式: 当前目录不是 git 仓库，无法创建隔离分支"
+                    }
+                );
             }
         }
     }
@@ -599,39 +741,16 @@ pub async fn run(
             });
             let _ = state_tx.send(state.clone());
 
-            let a_prompt = match exchange_kind {
-                ExchangeKind::InitialReview => {
-                    "你正在参与一个多 agent 代码审查流程。\
-                     请仔细阅读当前项目的所有源代码文件（src/ 目录），然后给出详细的审查意见，包括：\n\
-                     - 潜在的 bug 和逻辑错误\n\
-                     - 代码质量问题\n\
-                     - 架构设计问题\n\
-                     - 改进建议\n\n\
-                     请按优先级排列你的发现。"
-                        .to_string()
-                }
-                ExchangeKind::RoundReReview => {
-                    // First exchange of a new round (after code was modified)
-                    format!(
-                        "你正在参与一个多 agent 代码审查流程。\
-                         上一轮审查后代码已被修改。\
-                         请先阅读当前目录下的 {conv_filename} 文件了解完整的审查对话历史，\
-                         然后重新审查 src/ 目录下的源代码，检查之前发现的问题是否已修复，\
-                         以及是否引入了新问题。给出你的审查意见。"
-                    )
-                }
-                ExchangeKind::FollowUp => {
-                    format!(
-                        "你正在参与一个多 agent 代码审查流程。\
-                         请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
-                         然后根据 Agent B 的最新反馈继续讨论。\
-                         表达你是否同意以及你的进一步看法。\
-                         如果你已完全同意对方观点，请明确说 \"I agree\" 或 \"达成一致\"。"
-                    )
-                }
-            };
+            let a_prompt = build_agent_a_prompt(exchange_kind, &conv_filename, state.is_en());
 
-            let a_label = format!("第{round}轮 讨论{exchange}: Agent A ({})", agent_a.name);
+            let a_label = if state.is_en() {
+                format!(
+                    "Round {round} Exchange {exchange}: Agent A ({})",
+                    agent_a.name
+                )
+            } else {
+                format!("第{round}轮 讨论{exchange}: Agent A ({})", agent_a.name)
+            };
             match run_agent_with_heartbeat(
                 &agent_a,
                 &a_prompt,
@@ -644,11 +763,7 @@ pub async fn run(
             {
                 Ok(output) => {
                     last_a_response = output.content.clone();
-                    let label = match exchange_kind {
-                        ExchangeKind::InitialReview => "初始审查",
-                        ExchangeKind::RoundReReview => "重新审查",
-                        ExchangeKind::FollowUp => "后续讨论",
-                    };
+                    let label = discussion_role_label(exchange_kind, state.is_en());
                     conversation.append_agent_entry(&agent_a.name, label, &output.content)?;
                     state.log(&if state.is_en() {
                         format!(
@@ -663,16 +778,22 @@ pub async fn run(
                     });
                 }
                 Err(e) => {
-                    error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
+                    if state.is_en() {
+                        error!("Round {round} Exchange {exchange} Agent A failed: {e}");
+                    } else {
+                        error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
+                    }
                     state.log(&if state.is_en() {
                         format!("R{round} E{exchange}: Agent A failed: {e}")
                     } else {
                         format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}")
                     });
                     let _ = state_tx.send(state.clone());
-                    execution_error = Some(anyhow::anyhow!(
-                        "第{round}轮 讨论{exchange}: Agent A 执行失败: {e}"
-                    ));
+                    execution_error = Some(anyhow::anyhow!(if state.is_en() {
+                        format!("Round {round} Exchange {exchange}: Agent A execution failed: {e}")
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent A 执行失败: {e}")
+                    }));
                     break;
                 }
             }
@@ -695,19 +816,16 @@ pub async fn run(
             });
             let _ = state_tx.send(state.clone());
 
-            let b_prompt = format!(
-                "你是一位独立的代码审查专家。你的任务是对 '{conv_filename}' 中记录的代码审查意见进行逐条验证。\n\n\
-                 具体步骤：\n\
-                 1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
-                 2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
-                 3. 直接输出你的完整审查回应，格式如下：\n\
-                    - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
-                    - 补充任何审查者遗漏的新问题\n\
-                    - 在最后给出总结，如果你整体同意，请明确写 \"I agree\" 或 \"同意\"\n\n\
-                 重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
-            );
+            let b_prompt = build_agent_b_prompt(&conv_filename, state.is_en());
 
-            let b_label = format!("第{round}轮 讨论{exchange}: Agent B ({})", agent_b.name);
+            let b_label = if state.is_en() {
+                format!(
+                    "Round {round} Exchange {exchange}: Agent B ({})",
+                    agent_b.name
+                )
+            } else {
+                format!("第{round}轮 讨论{exchange}: Agent B ({})", agent_b.name)
+            };
             match run_agent_with_heartbeat(
                 &agent_b,
                 &b_prompt,
@@ -720,7 +838,11 @@ pub async fn run(
             {
                 Ok(output) => {
                     last_b_response = output.content.clone();
-                    conversation.append_agent_entry(&agent_b.name, "回应", &output.content)?;
+                    conversation.append_agent_entry(
+                        &agent_b.name,
+                        if state.is_en() { "Response" } else { "回应" },
+                        &output.content,
+                    )?;
                     state.log(&if state.is_en() {
                         format!(
                             "R{round} E{exchange}: Agent B done ({:.0}s)",
@@ -734,16 +856,22 @@ pub async fn run(
                     });
                 }
                 Err(e) => {
-                    error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
+                    if state.is_en() {
+                        error!("Round {round} Exchange {exchange} Agent B failed: {e}");
+                    } else {
+                        error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
+                    }
                     state.log(&if state.is_en() {
                         format!("R{round} E{exchange}: Agent B failed: {e}")
                     } else {
                         format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}")
                     });
                     let _ = state_tx.send(state.clone());
-                    execution_error = Some(anyhow::anyhow!(
-                        "第{round}轮 讨论{exchange}: Agent B 执行失败: {e}"
-                    ));
+                    execution_error = Some(anyhow::anyhow!(if state.is_en() {
+                        format!("Round {round} Exchange {exchange}: Agent B execution failed: {e}")
+                    } else {
+                        format!("第{round}轮 讨论{exchange}: Agent B 执行失败: {e}")
+                    }));
                     break;
                 }
             }
@@ -805,7 +933,11 @@ pub async fn run(
             });
             expose_branch_info(&mut state, &review_branch, &original_branch);
             finalize_session_state(&mut state, &conversation, &state_tx);
-            info!("第{round}轮审查未能达成共识");
+            if state.is_en() {
+                info!("Round {round}: review ended without consensus");
+            } else {
+                info!("第{round}轮审查未能达成共识");
+            }
             return Ok(());
         }
 
@@ -902,21 +1034,13 @@ pub async fn run(
             });
             let _ = state_tx.send(state.clone());
 
-            let apply_instruction = match apply_level {
-                2 => {
-                    "选择高优先级和中优先级问题，阅读相关的源代码文件并直接修改代码来修复这些问题。低优先级问题暂不处理。"
-                }
-                3 => "修复所有已达成共识的问题，阅读相关的源代码文件并直接修改代码。",
-                _ => {
-                    "选择所有高优先级问题，阅读相关的源代码文件并直接修改代码来修复。中低优先级问题暂不处理。"
-                }
-            };
-            let apply_prompt = format!(
-                "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
-                 然后根据讨论中达成一致的改进意见，{apply_instruction}"
-            );
+            let apply_prompt = build_apply_prompt(&conv_filename, apply_level, state.is_en());
 
-            let apply_label = format!("第{round}轮 代码修改: Agent B ({})", agent_b.name);
+            let apply_label = if state.is_en() {
+                format!("Round {round} Code Changes: Agent B ({})", agent_b.name)
+            } else {
+                format!("第{round}轮 代码修改: Agent B ({})", agent_b.name)
+            };
             match run_agent_with_heartbeat(
                 &agent_b,
                 &apply_prompt,
@@ -928,7 +1052,15 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
-                    conversation.append_agent_entry(&agent_b.name, "代码修改", &output.content)?;
+                    conversation.append_agent_entry(
+                        &agent_b.name,
+                        if state.is_en() {
+                            "Code Changes"
+                        } else {
+                            "代码修改"
+                        },
+                        &output.content,
+                    )?;
                     if let Err(e) =
                         crate::conversation::append_changelog(&project_path, round, &output.content)
                     {
@@ -939,9 +1071,11 @@ pub async fn run(
                         });
                         expose_branch_info(&mut state, &review_branch, &original_branch);
                         finalize_session_state(&mut state, &conversation, &state_tx);
-                        return Err(anyhow::anyhow!(
-                            "第{round}轮: 写入 review_changelog.md 失败: {e}"
-                        ));
+                        return Err(anyhow::anyhow!(if state.is_en() {
+                            format!("Round {round}: failed to write review_changelog.md: {e}")
+                        } else {
+                            format!("第{round}轮: 写入 review_changelog.md 失败: {e}")
+                        }));
                     }
                     state.log(if state.is_en() {
                         "review_changelog.md updated"
@@ -968,7 +1102,11 @@ pub async fn run(
                     });
                     expose_branch_info(&mut state, &review_branch, &original_branch);
                     finalize_session_state(&mut state, &conversation, &state_tx);
-                    return Err(anyhow::anyhow!("第{round}轮: Agent B 修改代码失败: {e}"));
+                    return Err(anyhow::anyhow!(if state.is_en() {
+                        format!("Round {round}: Agent B apply failed: {e}")
+                    } else {
+                        format!("第{round}轮: Agent B 修改代码失败: {e}")
+                    }));
                 }
             }
 
@@ -1014,7 +1152,11 @@ pub async fn run(
                     format!("提交更改失败: {e}")
                 });
                 finalize_session_state(&mut state, &conversation, &state_tx);
-                return Err(anyhow::anyhow!("分支模式: 自动提交失败: {e}"));
+                return Err(anyhow::anyhow!(if state.is_en() {
+                    format!("Branch mode: auto-commit failed: {e}")
+                } else {
+                    format!("分支模式: 自动提交失败: {e}")
+                }));
             }
         };
 
@@ -1092,7 +1234,14 @@ pub async fn run(
     }
 
     finalize_session_state(&mut state, &conversation, &state_tx);
-    info!("审查会话完成 (共{}轮)", config.review.max_rounds);
+    if state.is_en() {
+        info!(
+            "Review session completed ({} rounds)",
+            config.review.max_rounds
+        );
+    } else {
+        info!("审查会话完成 (共{}轮)", config.review.max_rounds);
+    }
     Ok(())
 }
 
@@ -1107,7 +1256,8 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        ExchangeKind, OrchestratorState, classify_exchange, git_commit_filtered, run,
+        ExchangeKind, OrchestratorState, build_agent_a_prompt, build_agent_b_prompt,
+        build_apply_prompt, classify_exchange, git_commit_filtered, run,
         should_append_round_header,
     };
     use crate::config::{
@@ -1272,6 +1422,27 @@ mod tests {
         assert!(should_append_round_header(1));
         assert!(!should_append_round_header(2));
         assert!(!should_append_round_header(3));
+    }
+
+    #[test]
+    fn english_agent_a_prompt_is_localized() {
+        let prompt = build_agent_a_prompt(ExchangeKind::InitialReview, "conversation.md", true);
+        assert!(prompt.contains("You are participating in a multi-agent code review workflow"));
+        assert!(!prompt.contains("你正在参与"));
+    }
+
+    #[test]
+    fn english_agent_b_prompt_is_localized() {
+        let prompt = build_agent_b_prompt("conversation.md", true);
+        assert!(prompt.contains("You are an independent code review expert"));
+        assert!(!prompt.contains("你是一位独立的代码审查专家"));
+    }
+
+    #[test]
+    fn english_apply_prompt_is_localized() {
+        let prompt = build_apply_prompt("conversation.md", 1, true);
+        assert!(prompt.contains("Consensus has been reached"));
+        assert!(!prompt.contains("双方已达成共识"));
     }
 
     #[tokio::test]
