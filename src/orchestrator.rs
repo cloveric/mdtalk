@@ -316,7 +316,8 @@ Then continue the discussion based on Agent B's latest response. \
 State whether you agree and provide further thoughts.\n\n\
 You MUST end your response with one of these exact conclusion lines:\n\
   If you fully agree: CONCLUSION: I agree\n\
-  If you still disagree: CONCLUSION: I disagree"
+  If you partially agree: CONCLUSION: partially agree\n\
+  If you disagree: CONCLUSION: I disagree"
             ),
         };
     }
@@ -342,8 +343,9 @@ You MUST end your response with one of these exact conclusion lines:\n\
 请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
 然后根据 Agent B 的最新反馈继续讨论，表达你的看法。\n\n\
 你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
-  如果你完全同意对方观点：结论：同意\n\
-  如果仍有分歧：结论：不同意"
+  完全同意：结论：同意\n\
+  部分同意：结论：部分同意\n\
+  存在分歧：结论：不同意"
         ),
     }
 }
@@ -359,8 +361,9 @@ Steps:\n\
    - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
    - Add any missed issues\n\
    - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
-     If you agree overall: write exactly → CONCLUSION: I agree\n\
-     If you disagree: write exactly → CONCLUSION: I disagree\n\n\
+     Full agreement: write exactly → CONCLUSION: I agree\n\
+     Partial agreement: write exactly → CONCLUSION: partially agree\n\
+     Disagree: write exactly → CONCLUSION: I disagree\n\n\
 Important: output the full review content directly; do not only report which files you read."
         );
     }
@@ -374,8 +377,9 @@ Important: output the full review content directly; do not only report which fil
    - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
    - 补充任何审查者遗漏的新问题\n\
    - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
-     如果你整体认可审查意见：写 → 结论：同意\n\
-     如果你存在重大分歧：写 → 结论：不同意\n\n\
+     完全认可：写 → 结论：同意\n\
+     部分认可：写 → 结论：部分同意\n\
+     存在重大分歧：写 → 结论：不同意\n\n\
 重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
     )
 }
@@ -890,15 +894,23 @@ pub async fn run(
             state.phase = Phase::CheckConsensus;
             let _ = state_tx.send(state.clone());
 
-            // Both agents must explicitly express agreement for consensus to be reached.
-            // Exchange 1 (A reviews, B verifies) will almost never reach consensus —
-            // that is by design. Consensus is expected in exchange 2+ when A responds
-            // to B's verification and both parties express agreement.
-            let result = consensus::check_consensus(
-                &last_a_response,
-                &last_b_response,
-                &config.review.consensus_keywords,
-            );
+            // Consensus rules:
+            // - exchange 1: only B's verdict counts (A just reviewed, hasn't expressed
+            //   agreement/disagreement yet). B saying "agree" or "partial agree" is enough.
+            // - exchange 2+: both A and B must express agreement (they've been debating,
+            //   both sides need to sign off).
+            let result = if exchange == 1 {
+                consensus::check_b_only(
+                    &last_b_response,
+                    &config.review.consensus_keywords,
+                )
+            } else {
+                consensus::check_consensus(
+                    &last_a_response,
+                    &last_b_response,
+                    &config.review.consensus_keywords,
+                )
+            };
 
             if result.reached {
                 state.log(&if state.is_en() {

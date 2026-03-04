@@ -228,14 +228,31 @@ fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
     !has_negated
 }
 
-/// Check whether the latest round's content indicates consensus.
+/// Check consensus based on Agent B's response only.
+/// Used for exchange 1, where Agent A is the reviewer (not yet expressing agreement)
+/// and Agent B is the verifier whose verdict is the deciding signal.
+/// Supports full agreement ("同意"), partial agreement ("部分同意"), and disagreement.
+pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
+    if agent_shows_consensus(agent_b_response, keywords) {
+        ConsensusResult {
+            reached: true,
+            summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
+        }
+    } else {
+        ConsensusResult {
+            reached: false,
+            summary: String::new(),
+        }
+    }
+}
+
+/// Check consensus for exchange 2+, where both agents have been debating
+/// and both must explicitly express agreement.
 pub fn check_consensus(
     agent_a_response: &str,
     agent_b_response: &str,
     keywords: &[String],
 ) -> ConsensusResult {
-    // Both agents must show unambiguous consensus (affirmative keywords
-    // without any negated keywords in the same response)
     let a_consensus = agent_shows_consensus(agent_a_response, keywords);
     let b_consensus = agent_shows_consensus(agent_b_response, keywords);
 
