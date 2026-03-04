@@ -6,9 +6,11 @@
 
 <br>
 
-<h3>One AI says <em>"looks great!"</em> — Two AIs find <strong>18 real bugs</strong> and fix them.</h3>
+<p><strong>中文名：左右互博</strong></p>
 
-<p>The adversarial code review system that catches what single-agent review can't.</p>
+<h3>Your AI says <em>"LGTM"</em>. MDTalk starts a two-agent code war and drags hidden bugs into daylight.</h3>
+
+<p><strong>The overkill review pipeline:</strong> adversarial debate, forced consensus, and one-command fixes.</p>
 
 <p>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Built_with-Rust-ef4a00?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"></a>&nbsp;
@@ -18,6 +20,7 @@
 </p>
 
 <p>
+  <a href="#-about">About</a> &nbsp;·&nbsp;
   <a href="#-quick-start">Quick Start</a> &nbsp;·&nbsp;
   <a href="#-how-it-works">How It Works</a> &nbsp;·&nbsp;
   <a href="#-configuration">Configuration</a> &nbsp;·&nbsp;
@@ -29,15 +32,23 @@
 
 </div>
 
+## 🧭 About
+
+**MDTalk (中文名：左右互博)** is an intentionally aggressive multi-agent review system.  
+It is built to challenge "looks good" complacency: one agent proposes findings, the other verifies and challenges them, and the process does not stop until consensus or exhaustion.
+
+If normal AI review is a quick glance, MDTalk is a stress test.
+
 ## 💡 The Problem
 
-You just finished a feature. You ask your AI to review it. It says *"looks great!"*
+You just finished a feature. Your AI reviewer says *"looks great!"*  
+Production says otherwise.
 
 **Meanwhile, the pipe deadlock, the semantic parameter bug, and the sandbox permission hole are all still there.**
 
 We ran MDTalk on its own codebase. Agent A (Claude) found 13 issues. Agent B (Codex) verified all 13, **then found 5 more**. They debated, agreed, and Agent B applied fixes to **9 files** — all in one command.
 
-> **One AI can write your code. It takes two to review it.**
+> **This is not a second opinion. It's a cross-examination.**
 
 <br>
 
@@ -46,9 +57,10 @@ We ran MDTalk on its own codebase. Agent A (Claude) found 13 issues. Agent B (Co
 <img src="assets/dashboard.png" alt="Dashboard Preview" width="45%" align="right">
 
 - 🤖 **Multi-Agent Debate** — Two AIs cross-examine each other
-- 🔧 **Auto-Fix** — Agent B applies top 3 fixes after consensus
+- 🔧 **Auto-Fix** — Agent B applies agreed fixes after consensus (High / High+Med / All)
 - 🔌 **Any CLI Agent** — Claude, Codex, Gemini, or your own
 - 📊 **Live TUI** — Real-time dashboard with status & logs
+- 🎛️ **Parameter-Rich Control** — CLI flags + interactive start screen knobs
 - 🧠 **Smart Consensus** — Negation-aware keyword matching
 - 🔄 **Multi-Round** — Rounds (fix code) × Exchanges (debate)
 
@@ -102,6 +114,8 @@ MDTalk uses a **two-layer loop**:
 
 **Prerequisites:** [Rust](https://rustup.rs/) 1.75+ and at least one AI CLI — [Claude Code](https://claude.ai/download), [Codex](https://github.com/openai/codex), or any prompt-accepting CLI.
 
+> MDTalk now requires explicit project input: use `--project <path>` or `--config <path>`.
+
 ```bash
 git clone https://github.com/cloveric/mdtalk && cd mdtalk
 cargo install --path .
@@ -117,8 +131,14 @@ mdtalk --project . --agent-a claude --agent-b claude
 # 2 rounds × 3 exchanges
 mdtalk --project . --max-rounds 2 --max-exchanges 3
 
+# Apply all agreed issues (not only high priority)
+mdtalk --project . --apply-level 3
+
 # Discuss only, don't touch code
 mdtalk --project . --no-apply
+
+# Load from a config file explicitly
+mdtalk --config ./mdtalk.toml
 
 # Preview the TUI layout
 mdtalk --demo
@@ -127,6 +147,12 @@ mdtalk --demo
 <br>
 
 ## ⚙️ Configuration
+
+Parameter precedence for dashboard mode:
+- `defaults < config file < CLI flags < start screen`
+
+In `--no-dashboard` mode:
+- `defaults < config file < CLI flags`
 
 Create `mdtalk.toml` in your project root:
 
@@ -163,15 +189,38 @@ mdtalk [OPTIONS]
 Options:
   -p, --project <PATH>        Project directory to review
   -c, --config <FILE>         Path to mdtalk.toml
-      --agent-a <CMD>         Agent A command (default: claude)
-      --agent-b <CMD>         Agent B command (default: codex)
+  --agent-a <CMD>         Agent A command (default: claude)
+  --agent-b <CMD>         Agent B command (default: codex)
   -m, --max-rounds <N>        Review rounds (default: 1)
   -e, --max-exchanges <N>     Exchanges per round (default: 5)
+      --apply-level <1|2|3>   Apply severity: 1=High, 2=High+Medium, 3=All (default: 1)
       --no-dashboard          Log to stdout instead of TUI
       --no-apply              Skip code modification after consensus
       --demo                  Preview dashboard with mock data
   -h, --help                  Print help
 ```
+
+</details>
+
+<details>
+<summary><strong>🎛️ Dashboard Start Screen Parameters</strong></summary>
+
+When you run with the TUI dashboard, press `Enter` on the start screen to launch with your chosen runtime parameters:
+
+| Field | Range / Values | Meaning |
+|------|------|------|
+| `Agent A` | `claude` / `codex` / `gemini` | Reviewer agent |
+| `A Timeout` | `60..7200s` | Per-invocation timeout for Agent A |
+| `Agent B` | `claude` / `codex` / `gemini` | Verifier / applier agent |
+| `B Timeout` | `60..7200s` | Per-invocation timeout for Agent B |
+| `Rounds` | `1..10` | Debate + apply cycles |
+| `Exchanges` | `1..10` | A↔B exchanges per round |
+| `Auto Apply` | `Yes` / `No` | Apply immediately or wait for manual confirm |
+| `Apply Level` | `High` / `High+Med` / `All` | Fix scope after consensus |
+| `Language` | `English` / `中文` | Dashboard language |
+| `Branch Mode` | `Yes` / `No` | Use isolated review branch + optional merge gate |
+
+Keyboard: `↑↓` select field, `←→` adjust value, `Enter` start.
 
 </details>
 
@@ -239,7 +288,7 @@ MDTalk reviewing **its own codebase** (Claude + Codex):
 
 <br>
 
-**One AI says "LGTM". Two AIs find 18 bugs.**
+**One AI says "LGTM". 左右互博 says "prove it."**
 
 **The best code review is a disagreement that ends in agreement.**
 
@@ -263,6 +312,8 @@ If this project saved you from a production bug, consider giving it a ⭐
 
 <br>
 
+**项目中文名：左右互博**
+
 ### 💡 问题
 
 你刚写完代码，让 AI 自检。它说「挺好的」。
@@ -271,16 +322,17 @@ If this project saved you from a production bug, consider giving it a ⭐
 
 我们用 MDTalk 审查了它自己的代码库。Agent A (Claude) 发现 13 个问题，Agent B (Codex) 全部验证通过，**又额外发现了 5 个**。它们辩论、达成共识，Agent B 直接修改了 **9 个文件** — 一条命令搞定。
 
-> **一个 AI 能写代码。审查代码，需要两个。**
+> **这不是“复核”级别，而是“互博”级别。**
 
 ---
 
 ### ✨ 亮点
 
 - 🤖 **多 Agent 辩论** — 两个独立 AI 交叉检验，对照源代码验证
-- 🔧 **自动修复** — 达成共识后，Agent B 应用前 3 个高优先级修复
+- 🔧 **自动修复** — 达成共识后按级别修复（高 / 高+中 / 全部）
 - 🔌 **任意 CLI Agent** — Claude Code、Codex、Gemini CLI 或任何 CLI 工具
 - 📊 **实时 TUI** — 基于 ratatui 的仪表盘，含对话预览、状态、日志
+- 🎛️ **参数可控** — CLI 参数 + 启动页参数双层控制
 - 🧠 **智能共识** — 关键词检测 + 否定前缀 + 词边界检查
 - 🔄 **多轮审查** — 轮次（含代码修改）× 讨论（直到共识）
 
@@ -310,9 +362,19 @@ cargo install --path .
 mdtalk --project /path/to/your/project          # Claude(A) + Codex(B) 审查
 mdtalk --project . --agent-a claude --agent-b claude  # 双 Claude
 mdtalk --project . --max-rounds 2 --max-exchanges 3  # 2轮 × 3次讨论
+mdtalk --project . --apply-level 3              # 按“全部级别”执行修改
 mdtalk --project . --no-apply                    # 仅讨论不改代码
+mdtalk --config ./mdtalk.toml                    # 显式加载配置文件
 mdtalk --demo                                    # 预览 TUI 布局
 ```
+
+> 现在必须显式传入 `--project` 或 `--config`，不再隐式读取默认配置。
+
+### ⚙️ 参数说明（新增）
+
+- CLI 新增：`--apply-level <1|2|3>`（1=仅高优先级，2=高+中，3=全部）
+- 启动页新增：`A Timeout`、`B Timeout`、`Auto Apply`、`Apply Level`、`Language`、`Branch Mode`
+- 参数优先级（仪表盘模式）：`默认值 < 配置文件 < CLI < 启动页`
 
 ---
 
