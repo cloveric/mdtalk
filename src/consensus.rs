@@ -28,54 +28,11 @@ const ENGLISH_NEGATION_TOKENS: &[&str] = &[
 
 const CHINESE_NEGATION_TOKENS: &[&str] = &["不", "没有", "未", "无法"];
 
-const EXPLICIT_DISAGREEMENT_PHRASES: &[&str] = &[
-    "not aligned",
-    "not in agreement",
-    "no consensus",
-    "cannot agree",
-    "can't agree",
-    "not on the same page",
-    "不同意",
-    "未达成一致",
-    "没有达成一致",
-    "有分歧",
-    "不一致",
-];
-
 fn is_clause_boundary(ch: char) -> bool {
     matches!(
         ch,
         '.' | '!' | '?' | ';' | ',' | '\n' | '。' | '！' | '？' | '；' | '，'
     )
-}
-
-fn contains_english_word(text_lower: &str, word: &str) -> bool {
-    let mut search_from = 0;
-    while let Some(pos) = text_lower[search_from..].find(word) {
-        let abs_pos = search_from + pos;
-        let abs_end = abs_pos + word.len();
-        let before = text_lower[..abs_pos].chars().next_back();
-        let after = text_lower[abs_end..].chars().next();
-        let valid_boundary = !before.is_some_and(|ch| ch.is_ascii_alphabetic())
-            && !after.is_some_and(|ch| ch.is_ascii_alphabetic());
-        if valid_boundary {
-            return true;
-        }
-        search_from = abs_end;
-    }
-    false
-}
-
-fn contains_explicit_disagreement(text: &str) -> bool {
-    let text_lower = text.to_lowercase();
-    if contains_english_word(&text_lower, "disagree")
-        || contains_english_word(&text_lower, "disagreement")
-    {
-        return true;
-    }
-    EXPLICIT_DISAGREEMENT_PHRASES
-        .iter()
-        .any(|phrase| text_lower.contains(phrase))
 }
 
 fn has_recent_english_negation(preceding: &str) -> bool {
@@ -160,72 +117,13 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
     false
 }
 
-/// Check if a keyword appears in the text in a negated context.
-fn has_negated_keyword(text: &str, keyword: &str) -> bool {
-    let kw_lower = keyword.to_lowercase();
-    let text_lower = text.to_lowercase();
-    let requires_word_boundary = kw_lower.chars().any(|ch| ch.is_ascii_alphabetic())
-        && kw_lower
-            .chars()
-            .all(|ch| ch.is_ascii_alphabetic() || ch.is_ascii_whitespace());
-
-    let mut search_from = 0;
-    while let Some(pos) = text_lower[search_from..].find(&kw_lower) {
-        let abs_pos = search_from + pos;
-        let abs_end = abs_pos + kw_lower.len();
-
-        if requires_word_boundary {
-            let before = text_lower[..abs_pos].chars().next_back();
-            let after = text_lower[abs_end..].chars().next();
-            let valid_boundary = !before.is_some_and(|ch| ch.is_ascii_alphabetic())
-                && !after.is_some_and(|ch| ch.is_ascii_alphabetic());
-            if !valid_boundary {
-                search_from = abs_end;
-                continue;
-            }
-        }
-
-        let mut context_start = abs_pos.saturating_sub(80);
-        while context_start > 0 && !text_lower.is_char_boundary(context_start) {
-            context_start -= 1;
-        }
-        let preceding = &text_lower[context_start..abs_pos];
-        let clause_start = preceding
-            .char_indices()
-            .rev()
-            .find(|(_, ch)| is_clause_boundary(*ch))
-            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
-        let local_preceding = preceding[clause_start..].trim_end();
-
-        let negated = is_negated_context(local_preceding);
-
-        if negated {
-            return true;
-        }
-
-        search_from = abs_end;
-    }
-
-    false
-}
-
 /// Check whether an agent's response shows unambiguous consensus.
 /// Returns false if the response contains mixed signals (both affirmative
 /// and negated consensus keywords).
 fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
-    if contains_explicit_disagreement(response) {
-        return false;
-    }
-
-    let has_affirmative = keywords
+    keywords
         .iter()
-        .any(|kw| has_affirmative_keyword(response, kw));
-    if !has_affirmative {
-        return false;
-    }
-    // If any keyword is negated elsewhere in the same response, treat as mixed signal
-    let has_negated = keywords.iter().any(|kw| has_negated_keyword(response, kw));
-    !has_negated
+        .any(|kw| has_affirmative_keyword(response, kw))
 }
 
 /// Check consensus based on Agent B's response only, accepting full OR partial agreement.
@@ -363,34 +261,54 @@ mod tests {
     }
 
     #[test]
-    fn mixed_agree_and_disagree_not_consensus() {
-        // Agent A says "agree" and "don't agree" in the same response — mixed signal
+    fn mixed_agree_and_disagree_is_partial_consensus() {
+        // Agent A agrees with some, disagrees with others — partial agreement counts
         let r = check_consensus(
             "I agree with points 1-3, but I don't agree with point 4.",
             "I agree with all the suggestions. LGTM.",
             &kws(),
         );
-        assert!(!r.reached);
+        assert!(r.reached);
     }
 
     #[test]
-    fn mixed_chinese_agree_disagree_not_consensus() {
+    fn mixed_chinese_agree_disagree_is_partial_consensus() {
         let kws = vec!["同意".into()];
         let r = check_consensus(
             "我同意前三条建议，但不同意第四条。",
             "我同意所有改进建议。",
             &kws,
         );
-        assert!(!r.reached);
+        assert!(r.reached);
     }
 
     #[test]
-    fn explicit_disagree_phrase_blocks_consensus() {
+    fn explicit_disagree_with_affirmative_is_partial_consensus() {
+        // A says "agree" AND "disagree" — has affirmative keyword, counts as partial
         let r = check_consensus(
             "I agree with most points, but I disagree with item 3.",
             "I agree with the updated review.",
             &kws(),
         );
+        assert!(r.reached);
+    }
+
+    #[test]
+    fn chinese_partial_agreement_with_negation_is_consensus() {
+        // Real-world case: B confirms 16/17 items, rejects 1 — should be consensus
+        let kws = vec!["成立".into(), "同意".into()];
+        let r = check_b_only(
+            "汇总: 17 条中 16 条成立，1 条不成立（第 3 条，当前代码已无该重复实现）。",
+            &kws,
+        );
+        assert!(r.reached);
+    }
+
+    #[test]
+    fn pure_negation_no_consensus() {
+        // B only says things are NOT valid — no affirmative keyword
+        let kws = vec!["成立".into()];
+        let r = check_b_only("以上问题均不成立，全部驳回。", &kws);
         assert!(!r.reached);
     }
 
