@@ -69,18 +69,28 @@ Experience the auditing process in real-time with our state-of-the-art terminal 
 **Prerequisites:** [Rust](https://rustup.rs/) 1.75+ and at least one AI CLI (e.g., [Claude Code](https://claude.ai/download)).
 
 ```bash
-# 1. Install the auditing framework
+# 1. Install MDTalk
 cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
 
-# 2. Initiate an adversarial review on your project
-mdtalk --project /path/to/your/project
+# 2. Enter your target repo and open the start screen (recommended)
+cd /path/to/your/project
+mdtalk --project .
 
-# 3. Force two Claude instances to cross-examine each other
-mdtalk --project . --agent-a claude --agent-b claude
+# 3. Override agents and review depth from CLI
+mdtalk --project . --agent-a claude --agent-b codex --max-rounds 2 --max-exchanges 6
 
-# 4. Preview the UI dashboard
+# 4. Load an explicit config file (CLI flags still override overlapping fields)
+mdtalk --config ./mdtalk.toml --project .
+
+# 5. Non-interactive safe run (CI-friendly)
+mdtalk --project . --no-dashboard --no-apply --apply-level 1
+
+# 6. Preview dashboard / print version
 mdtalk --demo
+mdtalk -V
 ```
+
+In dashboard mode, overlapping settings use this priority: built-in defaults < `mdtalk.toml` < CLI flags < start-screen selections.
 
 ## Architecture
 
@@ -127,13 +137,41 @@ flowchart LR
 **环境要求：** [Rust](https://rustup.rs/) 1.75+ 以及至少一个可用的 AI 命令行工具（如 [Claude Code](https://claude.ai/download)）。
 
 ```bash
-# 部署这款企业级审计框架
-git clone https://github.com/cloveric/mdtalk && cd mdtalk
-cargo run -- --project .
+# 1. 安装 MDTalk
+cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
 
-# 对当前项目发起对抗审查
-mdtalk --project /path/to/your/project
+# 2. 进入待审查项目并打开启动页（推荐）
+cd /path/to/your/project
+mdtalk --project .
 
-# 指定双端模型（如：双 Claude 内部博弈）
-mdtalk --project . --agent-a claude --agent-b claude
+# 3. 通过 CLI 覆盖 agent 与审查深度
+mdtalk --project . --agent-a claude --agent-b codex --max-rounds 2 --max-exchanges 6
+
+# 4. 显式读取配置文件（同名项仍可被 CLI 覆盖）
+mdtalk --config ./mdtalk.toml --project .
+
+# 5. 非交互安全模式（适合 CI）
+mdtalk --project . --no-dashboard --no-apply --apply-level 1
+
+# 6. 预览仪表盘 / 查看版本
+mdtalk --demo
+mdtalk -V
 ```
+
+在 Dashboard 模式下，同一配置项优先级为：内置默认 < `mdtalk.toml` < CLI 参数 < 启动页选择。
+
+<br>
+
+<div align="center">
+
+## Star History
+
+<a href="https://star-history.com/#cloveric/mdtalk&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cloveric/mdtalk&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=cloveric/mdtalk&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cloveric/mdtalk&type=Date" />
+ </picture>
+</a>
+
+</div>
