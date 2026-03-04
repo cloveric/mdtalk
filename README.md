@@ -4,7 +4,7 @@
 
 <br>
 
-<h1>MDTalk <small>(左右互博)</small></h1>
+<h1>MDTalk <small>(左右互搏)</small></h1>
 
 <p><b>Autonomous Adversarial Code Review System</b></p>
 <p><i>Your AI says "LGTM". MDTalk says "Prove it."</i></p>
@@ -26,6 +26,8 @@
 </div>
 
 > **MDTalk** is an uncompromising, multi-agent code auditing framework. It replaces passive AI compliance with rigorous adversarial debate, ensuring mission-critical code quality through cross-examination.
+> 
+> *The Chinese name **左右互搏 (Zuo You Hu Bo)** originates from the classic Wuxia novel "The Legend of the Condor Heroes". It describes an advanced martial arts technique where a warrior's left and right hands fight each other independently—perfectly symbolizing our dual-agent adversarial architecture.*
 
 ## The Illusion of "LGTM"
 
@@ -99,13 +101,15 @@ flowchart LR
 ## 简体中文
 
 > **拒绝虚假的“代码不错 (LGTM)”。用交叉验证重塑代码审查。**
+>
+> ***“左右互搏”*** *这一命名源自金庸武侠经典《射雕英雄传》，指的是双手互搏、自我对弈的绝顶武艺——这完美契合了本系统双重 AI 智能体相互盘问、交叉验证的架构理念。*
 
 ### “看似完美”的错觉
 当你向单一的 AI 助手提交数千行的复杂功能进行审查时，它往往会在几秒钟内回复：“逻辑严密，代码优秀 (LGTM)”。
 然而，潜藏在代码深处的并发死锁、参数语义错误和提权漏洞依然存在。单一 AI 模型天生具有“迎合性”和“幻觉”倾向，缺乏严谨的自我验证闭环。
 
 ### 破局：对抗性多智能体架构
-**左右互博 (MDTalk)** 彻底颠覆了传统的 AI 审查模式。它引入了双重独立的 AI 智能体，让它们在你的代码库中进行高强度的交叉盘问：
+**左右互搏 (MDTalk)** 彻底颠覆了传统的 AI 审查模式。它引入了双重独立的 AI 智能体，让它们在你的代码库中进行高强度的交叉盘问：
 - **审计者 (Agent A)：** 负责深度扫描、主动出击，无情地挖掘代码库中的每一个潜在缺陷。
 - **验证者 (Agent B)：** 充当怀疑论者，结合真实的源代码，逐一验证审计者提出的每一个问题。
 
