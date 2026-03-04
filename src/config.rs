@@ -76,21 +76,58 @@ fn default_max_exchanges() -> u32 {
 }
 fn default_consensus_keywords() -> Vec<String> {
     vec![
+        // ── English: full agreement ────────────────────────────────────────
         "agree".to_string(),
         "consensus".to_string(),
-        "达成一致".to_string(),
-        "同意".to_string(),
         "no further".to_string(),
         "looks good".to_string(),
+        "sounds good".to_string(),
         "LGTM".to_string(),
-        // Partial agreement — B confirmed some issues, apply the agreed ones
-        "部分同意".to_string(),
+        "confirmed".to_string(),
+        "accepted".to_string(),
+        "acknowledged".to_string(),
+        "approved".to_string(),
+        "correct".to_string(),
+        "valid".to_string(),
+        "verified".to_string(),
+        "concur".to_string(),
+        // ── English: partial agreement ─────────────────────────────────────
         "partially agree".to_string(),
-        // Mandatory conclusion line phrases from Agent B/A prompts:
+        "partially confirmed".to_string(),
+        "partially accepted".to_string(),
+        "mostly agree".to_string(),
+        // ── English: conclusion line (mandatory format in prompts) ─────────
         "CONCLUSION: I agree".to_string(),
-        "结论：同意".to_string(),
-        "结论：部分同意".to_string(),
+        "CONCLUSION: agree".to_string(),
+        "CONCLUSION: confirmed".to_string(),
+        "CONCLUSION: accepted".to_string(),
         "CONCLUSION: partially agree".to_string(),
+        "CONCLUSION: partially confirmed".to_string(),
+        "CONCLUSION: mostly agree".to_string(),
+        // ── Chinese: full agreement ────────────────────────────────────────
+        "同意".to_string(),
+        "达成一致".to_string(),
+        "认可".to_string(),
+        "确认".to_string(),
+        "成立".to_string(),
+        "正确".to_string(),
+        "有道理".to_string(),
+        "说得对".to_string(),
+        "没问题".to_string(),
+        // ── Chinese: partial agreement ─────────────────────────────────────
+        "部分同意".to_string(),
+        "部分成立".to_string(),
+        "部分认可".to_string(),
+        "部分确认".to_string(),
+        // ── Chinese: conclusion line (mandatory format in prompts) ─────────
+        "结论：同意".to_string(),
+        "结论：认可".to_string(),
+        "结论：成立".to_string(),
+        "结论：确认".to_string(),
+        "结论：部分同意".to_string(),
+        "结论：部分成立".to_string(),
+        "结论：部分认可".to_string(),
+        "结论：部分确认".to_string(),
     ]
 }
 fn default_output_file() -> String {

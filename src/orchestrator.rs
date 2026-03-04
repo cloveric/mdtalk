@@ -48,6 +48,102 @@ async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Resu
     Ok(())
 }
 
+/// Ask an LLM to judge whether a response expresses agreement.
+/// Returns "AGREE", "PARTIAL", or "DISAGREE", or None on failure/timeout.
+async fn semantic_agreement_verdict(
+    response: &str,
+    agent_config: &crate::config::AgentConfig,
+    project_path: &Path,
+) -> Option<&'static str> {
+    let snippet = &response[..response.len().min(3000)];
+    let prompt = format!(
+        "You are a consensus judge for a code review session.\n\
+         Read the response below and determine if the reviewer expressed agreement.\n\
+         Reply with EXACTLY one word on the first line (nothing else):\n\
+         AGREE    — fully agrees with the review findings\n\
+         PARTIAL  — agrees with some points, disagrees with others\n\
+         DISAGREE — disagrees with the review findings\n\n\
+         Response to judge:\n{}",
+        snippet
+    );
+    let judge_config = crate::config::AgentConfig {
+        name: agent_config.name.clone(),
+        command: agent_config.command.clone(),
+        timeout_secs: 30,
+    };
+    let runner = AgentRunner::new(&judge_config);
+    let output = runner.run(&prompt, project_path).await.ok()?;
+    let first = output.content.trim().lines().next()?.trim().to_uppercase();
+    if first.starts_with("PARTIAL") {
+        Some("PARTIAL")
+    } else if first.starts_with("DISAGREE") {
+        Some("DISAGREE")
+    } else if first.starts_with("AGREE") || first.contains("AGREE") {
+        Some("AGREE")
+    } else {
+        None
+    }
+}
+
+/// Semantic fallback consensus check when keyword matching finds no consensus.
+/// Uses an LLM to judge B's (and optionally A's) responses.
+async fn semantic_consensus_fallback(
+    last_a_response: &str,
+    last_b_response: &str,
+    is_last: bool,
+    exchange: u32,
+    agent_config: &crate::config::AgentConfig,
+    project_path: &Path,
+) -> Option<consensus::ConsensusResult> {
+    let b_verdict =
+        semantic_agreement_verdict(last_b_response, agent_config, project_path).await?;
+
+    // exchange 1, not last: only full agreement from B counts
+    if exchange == 1 && !is_last {
+        return match b_verdict {
+            "AGREE" => Some(consensus::ConsensusResult {
+                reached: true,
+                summary: "（语义判断）Agent B 完全认可审查意见。".to_string(),
+            }),
+            _ => None,
+        };
+    }
+
+    // last exchange or exchange 2+ not last: B full or partial is enough for B's side
+    let b_ok = matches!(b_verdict, "AGREE" | "PARTIAL");
+
+    if is_last {
+        // only B required
+        return if b_ok {
+            Some(consensus::ConsensusResult {
+                reached: true,
+                summary: format!(
+                    "（语义判断）Agent B 表达了认可意见（{}）。",
+                    if b_verdict == "AGREE" { "完全同意" } else { "部分同意" }
+                ),
+            })
+        } else {
+            None
+        };
+    }
+
+    // exchange 2+, not last: both A and B must agree
+    if !b_ok {
+        return None;
+    }
+    let a_verdict =
+        semantic_agreement_verdict(last_a_response, agent_config, project_path).await?;
+    let a_ok = matches!(a_verdict, "AGREE" | "PARTIAL");
+    if a_ok {
+        Some(consensus::ConsensusResult {
+            reached: true,
+            summary: "（语义判断）双方均表达了认可意见。".to_string(),
+        })
+    } else {
+        None
+    }
+}
+
 /// Collect changed paths from git status, including untracked files.
 async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
     let output = TokioCommand::new("git")
@@ -904,7 +1000,7 @@ pub async fn run(
             // 3. Exchange 2+ and not the last:
             //    Both A and B must express agreement (full or partial).
             let is_last = exchange == config.review.max_exchanges;
-            let result = if is_last {
+            let keyword_result = if is_last {
                 consensus::check_b_only(
                     &last_b_response,
                     &config.review.consensus_keywords,
@@ -920,6 +1016,27 @@ pub async fn run(
                     &last_b_response,
                     &config.review.consensus_keywords,
                 )
+            };
+
+            // If keyword matching found no consensus, fall back to semantic (LLM) check.
+            let result = if keyword_result.reached {
+                keyword_result
+            } else {
+                state.log(&if state.is_en() {
+                    "Keyword check found no consensus, trying semantic check...".to_string()
+                } else {
+                    "关键词未匹配，启动语义判断（LLM 裁判）...".to_string()
+                });
+                semantic_consensus_fallback(
+                    &last_a_response,
+                    &last_b_response,
+                    is_last,
+                    exchange,
+                    &config.agent_a,
+                    &config.project.path,
+                )
+                .await
+                .unwrap_or(keyword_result)
             };
 
             if result.reached {
