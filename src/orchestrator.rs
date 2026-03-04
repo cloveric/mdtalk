@@ -895,12 +895,22 @@ pub async fn run(
             let _ = state_tx.send(state.clone());
 
             // Consensus rules:
-            // - exchange 1: only B's verdict counts (A just reviewed, hasn't expressed
-            //   agreement/disagreement yet). B saying "agree" or "partial agree" is enough.
-            // - exchange 2+: both A and B must express agreement (they've been debating,
-            //   both sides need to sign off).
-            let result = if exchange == 1 {
+            // 1. Last exchange (exchange == max_exchanges, including max=1):
+            //    Only check B. Full OR partial agreement → apply agreed fixes.
+            //    This is the "last chance" — apply everything both sides accepted.
+            // 2. Exchange 1, not the last (max_exchanges > 1):
+            //    Only check B, but only FULL agreement counts.
+            //    Partial agree → keep discussing (can do better).
+            // 3. Exchange 2+ and not the last:
+            //    Both A and B must express agreement (full or partial).
+            let is_last = exchange == config.review.max_exchanges;
+            let result = if is_last {
                 consensus::check_b_only(
+                    &last_b_response,
+                    &config.review.consensus_keywords,
+                )
+            } else if exchange == 1 {
+                consensus::check_b_full_only(
                     &last_b_response,
                     &config.review.consensus_keywords,
                 )

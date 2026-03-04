@@ -228,15 +228,40 @@ fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
     !has_negated
 }
 
-/// Check consensus based on Agent B's response only.
-/// Used for exchange 1, where Agent A is the reviewer (not yet expressing agreement)
-/// and Agent B is the verifier whose verdict is the deciding signal.
-/// Supports full agreement ("同意"), partial agreement ("部分同意"), and disagreement.
+/// Check consensus based on Agent B's response only, accepting full OR partial agreement.
+/// Used when: (a) max_exchanges == 1 (only one shot), or (b) it's the last exchange
+/// (exhausted all exchanges — apply whatever was agreed).
 pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
     if agent_shows_consensus(agent_b_response, keywords) {
         ConsensusResult {
             reached: true,
             summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
+        }
+    } else {
+        ConsensusResult {
+            reached: false,
+            summary: String::new(),
+        }
+    }
+}
+
+/// Check consensus based on Agent B's response only, accepting ONLY full agreement.
+/// Used for exchange 1 when max_exchanges > 1: partial agreement means "keep discussing".
+pub fn check_b_full_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
+    // Filter out partial-agreement keywords (those containing "部分" or "partial")
+    let full_keywords: Vec<String> = keywords
+        .iter()
+        .filter(|kw| {
+            let lower = kw.to_lowercase();
+            !lower.contains("部分") && !lower.contains("partial")
+        })
+        .cloned()
+        .collect();
+
+    if agent_shows_consensus(agent_b_response, &full_keywords) {
+        ConsensusResult {
+            reached: true,
+            summary: "Agent B 完全认可审查意见。".to_string(),
         }
     } else {
         ConsensusResult {
