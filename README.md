@@ -51,7 +51,7 @@ They engage in an autonomous, rigorous debate. **No human intervention is requir
 - **Adversarial Debate Engine:** Two independent AI models (e.g., Claude & Codex) auditing each other to guarantee zero hallucinations.
 - **Autonomous Resolution:** Once consensus is achieved, verified fixes are surgically applied to your source files in real-time.
 - **Universal LLM Integration:** Seamlessly connect with Claude Code, Codex, Gemini, or any standard CLI-based AI agent.
-- **Advanced Contextual Consensus:** Powered by a sophisticated parsing engine that understands negations, word boundaries, and nuanced agreement.
+- **Advanced Contextual Consensus:** Dual-layer consensus engine — keyword matching with negation/boundary detection, falling back to LLM semantic judgment for ambiguous responses. Supports full and partial agreement.
 - **Premium Terminal UI:** Monitor the entire auditing process through a beautifully crafted, highly responsive Ratatui dashboard.
 
 ## Work Interface
@@ -70,7 +70,7 @@ Experience the auditing process in real-time with our state-of-the-art terminal 
 
 ```bash
 # 1. Install MDTalk
-cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
+cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.4 mdtalk
 
 # 2. Enter your target repo and open the start screen (recommended)
 cd /path/to/your/project
@@ -92,18 +92,39 @@ mdtalk -V
 
 In dashboard mode, overlapping settings use this priority: built-in defaults < `mdtalk.toml` < CLI flags < start-screen selections.
 
+## How Consensus Works
+
+MDTalk uses a **three-rule consensus model** — the judgment logic adapts based on where you are in the debate:
+
+| Situation | Consensus Rule |
+|-----------|---------------|
+| Exchange 1, `max_exchanges = 1` (only shot) | Agent B alone decides — full **or** partial agreement |
+| Exchange 1, `max_exchanges > 1` (more rounds available) | Agent B alone — **only full agreement**; partial → keep debating |
+| Exchange 2+ (not the last) | **Both** A and B must express agreement (full or partial) |
+| Last exchange (`exchange == max_exchanges`) | Agent B alone — full **or** partial agreement |
+
+**Consensus detection is dual-layer:**
+1. **Keyword matching** — checks for `agree / confirmed / 同意 / 成立 / 认可` (and 50+ variants) with negation and word-boundary awareness
+2. **Semantic fallback** — if keywords don't match, an LLM judge reads Agent B's response and returns `AGREE / PARTIAL / DISAGREE`
+
 ## Architecture
 
 ```mermaid
-flowchart LR
-    A["🔍 The Auditor\n(Agent A)"] -->|Proposes Findings| C["📄 conversation.md"]
-    C --> B["✅ The Verifier\n(Agent B)"]
-    B --> D{"Consensus\nReached?"}
-    D -- "Debate Iterates" --> A
-    D -- "Verified Agreement" --> F["🔧 Auto-Apply Fixes"]
-    F --> R{"Next Round?"}
-    R -- Yes --> A
-    R -- No --> Done["🛡️ Codebase Secured"]
+flowchart TD
+    Start(["▶ Start"]) --> A
+
+    subgraph ROUND ["🔁 Round Loop (max_rounds)"]
+        subgraph EXCHANGE ["💬 Exchange Loop (max_exchanges)"]
+            A["🔍 Auditor (Agent A)\nReviews code / responds to B"] --> MD["📄 conversation.md"]
+            MD --> B["✅ Verifier (Agent B)\nValidates / cross-examines A"]
+            B --> CK{"Consensus\nCheck"}
+            CK -- "No consensus" --> A
+        end
+        CK -- "Consensus\n(full or partial)" --> FIX["🔧 Apply Fixes"]
+        FIX --> NR{"Next\nRound?"}
+        NR -- "Yes" --> A
+    end
+    NR -- "No" --> Done["🛡️ Codebase Secured"]
 ```
 
 ---
@@ -128,17 +149,32 @@ flowchart LR
 > *在我们的内部测试中，单一 AI 遗漏了 5 个核心漏洞；而 MDTalk 成功捕获了全部问题，不仅推演出了最佳修复方案，还全自动完成了 9 个文件的修改。*
 
 ### 核心优势
-- **对抗性验证引擎**：双模型互为攻守，从根本上消除 AI 幻觉，确保审查结果的绝对可靠。
+- **对抗性验证引擎**：双模型互为攻守，从根本上消除 AI 幻觉，确保审查结果的绝对可靠。支持全部同意与部分同意两种共识结果，精准应用已达成一致的修改。
 - **零妥协自动修复**：一旦达成技术共识，系统将以“手术刀级别”的精度自动修改源码，无需人工复制粘贴。
 - **无缝接入任意大模型**：完美适配 Claude Code, Codex, Gemini CLI 或任何基于命令行的 AI 工具。
 - **极客级终端大屏 (TUI)**：基于 Ratatui 构建的实时终端可视化面板，以极其优雅的方式呈现 AI 间的思维碰撞。
+
+### 共识判断机制
+
+MDTalk 使用**三规则共识模型**，根据当前讨论的位置动态调整判断逻辑：
+
+| 情况 | 共识规则 |
+|------|---------|
+| 第 1 次讨论，`max_exchanges = 1`（唯一一次） | 只看 B，全部同意或部分同意都算 |
+| 第 1 次讨论，`max_exchanges > 1`（还有机会） | 只看 B，仅全部同意才算；部分同意继续讨论 |
+| 第 2 次及以上（非最后一次） | A 和 B 都需要表达认可（全/部分均可） |
+| 最后一次讨论（用尽次数） | 只看 B，全部同意或部分同意都算 |
+
+**共识检测双重保障：**
+1. **关键词匹配** — 检测 `agree / confirmed / 同意 / 成立 / 认可` 等 50+ 种表达，带否定词和词边界识别
+2. **语义兜底** — 关键词未命中时，调用 LLM 裁判语义判断，返回 `AGREE / PARTIAL / DISAGREE`
 
 ### 快速接入
 **环境要求：** [Rust](https://rustup.rs/) 1.75+ 以及至少一个可用的 AI 命令行工具（如 [Claude Code](https://claude.ai/download)）。
 
 ```bash
 # 1. 安装 MDTalk
-cargo install --git https://github.com/cloveric/mdtalk --tag <release-tag> mdtalk
+cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.4 mdtalk
 
 # 2. 进入待审查项目并打开启动页（推荐）
 cd /path/to/your/project
