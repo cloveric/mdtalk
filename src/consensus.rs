@@ -5,35 +5,108 @@ pub struct ConsensusResult {
     pub summary: String,
 }
 
-/// Negation patterns that invalidate a keyword match.
-const NEGATION_PREFIXES: &[&str] = &[
-    "no ",
-    "not ",
-    "not in ",
-    "don't ",
-    "doesn't ",
-    "do not ",
-    "does not ",
-    "cannot ",
-    "can't ",
-    "didn't ",
-    "did not ",
-    "won't ",
-    "will not ",
-    "wouldn't ",
-    "would not ",
-    "shouldn't ",
-    "should not ",
-    "haven't ",
-    "have not ",
-    "hasn't ",
-    "has not ",
-    "never ",
-    "不",
-    "没有",
-    "未",
-    "无法",
+const ENGLISH_NEGATION_TOKENS: &[&str] = &[
+    "no",
+    "not",
+    "dont",
+    "don't",
+    "doesnt",
+    "doesn't",
+    "cannot",
+    "cant",
+    "can't",
+    "didnt",
+    "didn't",
+    "wont",
+    "won't",
+    "wouldnt",
+    "wouldn't",
+    "shouldnt",
+    "shouldn't",
+    "never",
 ];
+
+const CHINESE_NEGATION_TOKENS: &[&str] = &["不", "没有", "未", "无法"];
+
+const EXPLICIT_DISAGREEMENT_PHRASES: &[&str] = &[
+    "not aligned",
+    "not in agreement",
+    "no consensus",
+    "cannot agree",
+    "can't agree",
+    "not on the same page",
+    "不同意",
+    "未达成一致",
+    "没有达成一致",
+    "有分歧",
+    "不一致",
+];
+
+fn is_clause_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '.' | '!' | '?' | ';' | ',' | '\n' | '。' | '！' | '？' | '；' | '，'
+    )
+}
+
+fn contains_english_word(text_lower: &str, word: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(pos) = text_lower[search_from..].find(word) {
+        let abs_pos = search_from + pos;
+        let abs_end = abs_pos + word.len();
+        let before = text_lower[..abs_pos].chars().next_back();
+        let after = text_lower[abs_end..].chars().next();
+        let valid_boundary = !before.is_some_and(|ch| ch.is_ascii_alphabetic())
+            && !after.is_some_and(|ch| ch.is_ascii_alphabetic());
+        if valid_boundary {
+            return true;
+        }
+        search_from = abs_end;
+    }
+    false
+}
+
+fn contains_explicit_disagreement(text: &str) -> bool {
+    let text_lower = text.to_lowercase();
+    if contains_english_word(&text_lower, "disagree")
+        || contains_english_word(&text_lower, "disagreement")
+    {
+        return true;
+    }
+    EXPLICIT_DISAGREEMENT_PHRASES
+        .iter()
+        .any(|phrase| text_lower.contains(phrase))
+}
+
+fn has_recent_english_negation(preceding: &str) -> bool {
+    let tokens: Vec<&str> = preceding
+        .split(|ch: char| !(ch.is_ascii_alphabetic() || ch == '\''))
+        .filter(|token| !token.is_empty())
+        .collect();
+    tokens
+        .iter()
+        .rev()
+        .take(4)
+        .any(|token| ENGLISH_NEGATION_TOKENS.contains(token))
+}
+
+fn has_recent_chinese_negation(preceding: &str) -> bool {
+    let tail: String = preceding
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    CHINESE_NEGATION_TOKENS
+        .iter()
+        .any(|token| tail.contains(token))
+}
+
+fn is_negated_context(preceding: &str) -> bool {
+    has_recent_english_negation(preceding) || has_recent_chinese_negation(preceding)
+}
 
 /// Check if a keyword appears in the text in an affirmative context
 /// (i.e., not preceded by a negation).
@@ -62,17 +135,20 @@ fn has_affirmative_keyword(text: &str, keyword: &str) -> bool {
             }
         }
 
-        // Check the ~20 chars before this occurrence for negation.
-        // Find a valid UTF-8 char boundary to avoid panic on multibyte text.
-        let mut context_start = abs_pos.saturating_sub(20);
+        // Check the local clause before this occurrence for negation.
+        let mut context_start = abs_pos.saturating_sub(80);
         while context_start > 0 && !text_lower.is_char_boundary(context_start) {
             context_start -= 1;
         }
         let preceding = &text_lower[context_start..abs_pos];
+        let clause_start = preceding
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| is_clause_boundary(*ch))
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let local_preceding = preceding[clause_start..].trim_end();
 
-        let negated = NEGATION_PREFIXES
-            .iter()
-            .any(|neg| preceding.ends_with(neg) || preceding.trim_end().ends_with(neg.trim()));
+        let negated = is_negated_context(local_preceding);
 
         if !negated {
             return true;
@@ -109,15 +185,19 @@ fn has_negated_keyword(text: &str, keyword: &str) -> bool {
             }
         }
 
-        let mut context_start = abs_pos.saturating_sub(20);
+        let mut context_start = abs_pos.saturating_sub(80);
         while context_start > 0 && !text_lower.is_char_boundary(context_start) {
             context_start -= 1;
         }
         let preceding = &text_lower[context_start..abs_pos];
+        let clause_start = preceding
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| is_clause_boundary(*ch))
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let local_preceding = preceding[clause_start..].trim_end();
 
-        let negated = NEGATION_PREFIXES
-            .iter()
-            .any(|neg| preceding.ends_with(neg) || preceding.trim_end().ends_with(neg.trim()));
+        let negated = is_negated_context(local_preceding);
 
         if negated {
             return true;
@@ -133,6 +213,10 @@ fn has_negated_keyword(text: &str, keyword: &str) -> bool {
 /// Returns false if the response contains mixed signals (both affirmative
 /// and negated consensus keywords).
 fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
+    if contains_explicit_disagreement(response) {
+        return false;
+    }
+
     let has_affirmative = keywords
         .iter()
         .any(|kw| has_affirmative_keyword(response, kw));
@@ -193,6 +277,16 @@ mod tests {
     }
 
     #[test]
+    fn inserted_words_between_not_and_agree_is_not_consensus() {
+        let r = check_consensus(
+            "I do not fully agree with this plan.",
+            "I agree with the review.",
+            &kws(),
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
     fn one_side_only() {
         let r = check_consensus("I agree.", "I have more suggestions.", &kws());
         assert!(!r.reached);
@@ -244,6 +338,16 @@ mod tests {
             "我同意前三条建议，但不同意第四条。",
             "我同意所有改进建议。",
             &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn explicit_disagree_phrase_blocks_consensus() {
+        let r = check_consensus(
+            "I agree with most points, but I disagree with item 3.",
+            "I agree with the updated review.",
+            &kws(),
         );
         assert!(!r.reached);
     }

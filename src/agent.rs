@@ -6,6 +6,10 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::config::AgentConfig;
+#[cfg(unix)]
+use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
+use nix::unistd::Pid;
 
 #[derive(Debug, Clone)]
 pub struct AgentOutput {
@@ -16,21 +20,31 @@ pub struct AgentOutput {
 pub struct AgentRunner {
     pub name: String,
     command: String,
+    command_program: String,
+    command_prefix_args: Vec<String>,
     timeout: Duration,
 }
 
 impl AgentRunner {
     pub fn new(config: &AgentConfig) -> Self {
+        let parts = split_command_line(&config.command);
+        let command_program = parts
+            .first()
+            .cloned()
+            .unwrap_or_else(|| config.command.clone());
+        let command_prefix_args = parts.into_iter().skip(1).collect();
         Self {
             name: config.name.clone(),
             command: config.command.clone(),
+            command_program,
+            command_prefix_args,
             timeout: Duration::from_secs(config.timeout_secs),
         }
     }
 
     /// Build the CLI arguments depending on which agent we're calling.
     fn build_args(&self, prompt: &str) -> Vec<String> {
-        match self.command.as_str() {
+        match command_name_from_program(&self.command_program).as_str() {
             "claude" => vec![
                 "-p".to_string(),
                 prompt.to_string(),
@@ -43,10 +57,7 @@ impl AgentRunner {
                 "--dangerously-bypass-approvals-and-sandbox".to_string(),
                 prompt.to_string(),
             ],
-            "gemini" => vec![
-                "--approval-mode=yolo".to_string(),
-                prompt.to_string(),
-            ],
+            "gemini" => vec!["--approval-mode=yolo".to_string(), prompt.to_string()],
             // Generic fallback: just pass prompt as a single arg
             _ => vec![prompt.to_string()],
         }
@@ -54,7 +65,8 @@ impl AgentRunner {
 
     /// Run the agent with the given prompt, in the given project directory.
     pub async fn run(&self, prompt: &str, project_path: &Path) -> Result<AgentOutput> {
-        let args = self.build_args(prompt);
+        let mut args = self.command_prefix_args.clone();
+        args.extend(self.build_args(prompt));
         info!(
             agent = %self.name,
             command = %self.command,
@@ -63,10 +75,11 @@ impl AgentRunner {
 
         let start = Instant::now();
 
-        // On Windows, CLI tools installed via npm are .cmd scripts that need
-        // to be invoked through cmd.exe for proper PATH resolution.
-        let mut child = if cfg!(windows) {
-            let mut full_args = vec!["/C".to_string(), self.command.clone()];
+        #[cfg(windows)]
+        let mut child = {
+            // On Windows, CLI tools installed via npm are often .cmd scripts that
+            // are more reliable when launched through cmd /C.
+            let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
             full_args.extend(args.clone());
             let mut cmd = Command::new("cmd");
             cmd.kill_on_drop(true)
@@ -77,10 +90,14 @@ impl AgentRunner {
                 .stderr(std::process::Stdio::piped());
             cmd.spawn()
                 .with_context(|| format!("Failed to spawn agent '{}'", self.name))?
-        } else {
-            let mut cmd = Command::new(&self.command);
+        };
+
+        #[cfg(not(windows))]
+        let mut child = {
+            let mut cmd = Command::new(&self.command_program);
             cmd.kill_on_drop(true)
                 .args(&args)
+                .process_group(0)
                 .current_dir(project_path)
                 .env_remove("CLAUDECODE")
                 .stdout(std::process::Stdio::piped())
@@ -175,18 +192,30 @@ impl AgentRunner {
 
                 // On Windows, child.kill() only kills cmd.exe, not the actual agent.
                 // Use taskkill /T /F /PID to kill the entire process tree.
-                if let Some(pid) = child.id() {
-                    if cfg!(windows) {
+                #[cfg(windows)]
+                {
+                    if let Some(pid) = child.id() {
                         let _ = Command::new("taskkill")
                             .args(["/T", "/F", "/PID", &pid.to_string()])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
                             .status()
                             .await;
-                    } else {
-                        child.kill().await.ok();
                     }
-                } else {
+                    child.kill().await.ok();
+                }
+
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = child.id() {
+                        // The child is started with process_group(0), so pid == pgid.
+                        let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                    }
+                    child.kill().await.ok();
+                }
+
+                #[cfg(not(any(unix, windows)))]
+                {
                     child.kill().await.ok();
                 }
 
@@ -204,17 +233,47 @@ impl AgentRunner {
     }
 }
 
+fn command_name_from_program(program: &str) -> String {
+    std::path::Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase()
+}
+
+fn split_command_line(command: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let parts = winsplit::split(command);
+        if parts.is_empty() {
+            vec![command.to_string()]
+        } else {
+            parts
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        match shell_words::split(command) {
+            Ok(parts) if !parts.is_empty() => parts,
+            _ => vec![command.to_string()],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::config::AgentConfig;
+
     use super::AgentRunner;
-    use std::time::Duration;
 
     fn runner(command: &str) -> AgentRunner {
-        AgentRunner {
+        let cfg = AgentConfig {
             name: command.to_string(),
             command: command.to_string(),
-            timeout: Duration::from_secs(60),
-        }
+            timeout_secs: 60,
+        };
+        AgentRunner::new(&cfg)
     }
 
     #[test]
@@ -239,5 +298,25 @@ mod tests {
     fn gemini_uses_yolo_mode() {
         let args = runner("gemini").build_args("hello");
         assert!(args.iter().any(|arg| arg == "--approval-mode=yolo"));
+    }
+
+    #[test]
+    fn codex_with_extra_cli_args_still_uses_exec_mode() {
+        let args = runner("codex --model gpt-5").build_args("hello");
+        assert!(args.iter().any(|arg| arg == "exec"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
+    }
+
+    #[test]
+    fn command_prefix_args_are_parsed_from_command_line() {
+        let runner = runner("codex --model gpt-5");
+        assert_eq!(runner.command_program, "codex");
+        assert_eq!(
+            runner.command_prefix_args,
+            vec!["--model".to_string(), "gpt-5".to_string()]
+        );
     }
 }

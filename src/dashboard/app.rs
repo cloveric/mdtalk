@@ -95,8 +95,20 @@ impl DashboardApp {
             2 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
             3 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
             4 => self.auto_apply = !self.auto_apply,
-            5 => self.apply_level = if self.apply_level <= 1 { 3 } else { self.apply_level - 1 },
-            6 => self.language = if self.language == "en" { "zh".to_string() } else { "en".to_string() },
+            5 => {
+                self.apply_level = if self.apply_level <= 1 {
+                    3
+                } else {
+                    self.apply_level - 1
+                }
+            }
+            6 => {
+                self.language = if self.language == "en" {
+                    "zh".to_string()
+                } else {
+                    "en".to_string()
+                }
+            }
             7 => self.branch_mode = !self.branch_mode,
             _ => {}
         }
@@ -111,8 +123,20 @@ impl DashboardApp {
             2 => self.edit_rounds = (self.edit_rounds + 1).min(10),
             3 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
             4 => self.auto_apply = !self.auto_apply,
-            5 => self.apply_level = if self.apply_level >= 3 { 1 } else { self.apply_level + 1 },
-            6 => self.language = if self.language == "en" { "zh".to_string() } else { "en".to_string() },
+            5 => {
+                self.apply_level = if self.apply_level >= 3 {
+                    1
+                } else {
+                    self.apply_level + 1
+                }
+            }
+            6 => {
+                self.language = if self.language == "en" {
+                    "zh".to_string()
+                } else {
+                    "en".to_string()
+                }
+            }
             7 => self.branch_mode = !self.branch_mode,
             _ => {}
         }

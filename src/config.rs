@@ -147,6 +147,41 @@ impl MdtalkConfig {
         Ok(config)
     }
 
+    /// Apply CLI overrides on top of the current config.
+    /// Priority: defaults/file < CLI.
+    pub fn apply_cli_overrides(
+        &mut self,
+        project_path: Option<PathBuf>,
+        agent_a_cmd: Option<String>,
+        agent_b_cmd: Option<String>,
+        max_rounds: Option<u32>,
+        max_exchanges: Option<u32>,
+    ) -> Result<()> {
+        if let Some(path) = project_path {
+            self.project.path = path;
+        }
+
+        if let Some(cmd) = agent_a_cmd {
+            self.agent_a.name = cmd.clone();
+            self.agent_a.command = cmd;
+        }
+
+        if let Some(cmd) = agent_b_cmd {
+            self.agent_b.name = cmd.clone();
+            self.agent_b.command = cmd;
+        }
+
+        if let Some(v) = max_rounds {
+            self.review.max_rounds = v;
+        }
+
+        if let Some(v) = max_exchanges {
+            self.review.max_exchanges = v;
+        }
+
+        self.validate()
+    }
+
     /// Validate configuration values.
     fn validate(&self) -> Result<()> {
         if self.review.max_rounds < 1 {
@@ -198,5 +233,36 @@ impl MdtalkConfig {
             },
             dashboard: DashboardConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MdtalkConfig;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cli_overrides_loaded_config_values() {
+        let mut cfg = MdtalkConfig::from_cli(PathBuf::from("."), None, None, Some(1), Some(1));
+        cfg.agent_a.timeout_secs = 900;
+        cfg.agent_b.timeout_secs = 1200;
+
+        cfg.apply_cli_overrides(
+            Some(PathBuf::from("C:/tmp/project")),
+            Some("codex".to_string()),
+            Some("claude".to_string()),
+            Some(3),
+            Some(7),
+        )
+        .expect("cli overrides should be valid");
+
+        assert_eq!(cfg.project.path, PathBuf::from("C:/tmp/project"));
+        assert_eq!(cfg.agent_a.command, "codex");
+        assert_eq!(cfg.agent_b.command, "claude");
+        assert_eq!(cfg.review.max_rounds, 3);
+        assert_eq!(cfg.review.max_exchanges, 7);
+        // Overriding command should not reset timeout from existing config.
+        assert_eq!(cfg.agent_a.timeout_secs, 900);
+        assert_eq!(cfg.agent_b.timeout_secs, 1200);
     }
 }

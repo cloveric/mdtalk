@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -68,10 +69,31 @@ impl Conversation {
         Ok(())
     }
 
-    /// Read the full conversation content.
-    pub fn read_all(&self) -> Result<String> {
-        std::fs::read_to_string(&self.path)
-            .with_context(|| format!("Failed to read conversation file {:?}", self.path))
+    /// Read only the last `max_lines` lines of the conversation file.
+    pub fn read_tail_lines(&self, max_lines: usize) -> Result<String> {
+        if max_lines == 0 {
+            return Ok(String::new());
+        }
+
+        let file = std::fs::File::open(&self.path)
+            .with_context(|| format!("Failed to open conversation file {:?}", self.path))?;
+        let reader = BufReader::new(file);
+        let mut tail = VecDeque::with_capacity(max_lines);
+
+        for line in reader.lines() {
+            let line =
+                line.with_context(|| format!("Failed to read conversation file {:?}", self.path))?;
+            if tail.len() == max_lines {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+
+        let mut output = tail.into_iter().collect::<Vec<_>>().join("\n");
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        Ok(output)
     }
 }
 
@@ -98,4 +120,42 @@ pub fn append_changelog(project_dir: &Path, round: u32, content: &str) -> Result
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::Conversation;
+
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("mdtalk-conv-{name}-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("failed to create test dir");
+        dir
+    }
+
+    #[test]
+    fn read_tail_lines_returns_latest_lines_only() {
+        let dir = unique_test_dir("tail-lines");
+        let conv = Conversation::new(&dir, "conversation.md", "test");
+        conv.create().expect("failed to create conversation file");
+
+        let mut all_lines = String::new();
+        for i in 0..20 {
+            all_lines.push_str(&format!("line-{i}\n"));
+        }
+        std::fs::write(dir.join("conversation.md"), all_lines).expect("failed to write test lines");
+
+        let tail = conv.read_tail_lines(5).expect("failed to read tail lines");
+        assert!(!tail.contains("line-0"));
+        assert!(tail.contains("line-15"));
+        assert!(tail.contains("line-19"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

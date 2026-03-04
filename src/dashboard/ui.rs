@@ -66,19 +66,40 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         app.agent_presets[app.agent_b_idx].clone(),
         format!("{}", app.edit_rounds),
         format!("{}", app.edit_exchanges),
-        if app.auto_apply { "Yes".to_string() } else { "No".to_string() },
+        if app.auto_apply {
+            "Yes".to_string()
+        } else {
+            "No".to_string()
+        },
         match app.apply_level {
             2 => "High+Med".to_string(),
             3 => "All".to_string(),
             _ => "High".to_string(),
         },
-        if app.language == "en" { "English".to_string() } else { "中文".to_string() },
-        if app.branch_mode { "Yes".to_string() } else { "No".to_string() },
+        if app.language == "en" {
+            "English".to_string()
+        } else {
+            "中文".to_string()
+        },
+        if app.branch_mode {
+            "Yes".to_string()
+        } else {
+            "No".to_string()
+        },
     ];
 
     let normal_style = Style::default().fg(Color::Gray);
     let selected_bg = Style::default().bg(Color::DarkGray).fg(Color::White);
-    let value_colors = [Color::Cyan, Color::Magenta, Color::White, Color::White, Color::Yellow, Color::Green, Color::Cyan, Color::Yellow];
+    let value_colors = [
+        Color::Cyan,
+        Color::Magenta,
+        Color::White,
+        Color::White,
+        Color::Yellow,
+        Color::Green,
+        Color::Cyan,
+        Color::Yellow,
+    ];
 
     let mut info_lines = vec![Line::from("")];
     for (i, (label, value)) in labels.iter().zip(values.iter()).enumerate() {
@@ -88,20 +109,12 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         if is_selected {
             info_lines.push(Line::from(vec![
                 Span::styled(*label, selected_bg),
-                Span::styled(
-                    "◄ ",
-                    selected_bg.add_modifier(Modifier::BOLD),
-                ),
+                Span::styled("◄ ", selected_bg.add_modifier(Modifier::BOLD)),
                 Span::styled(
                     value,
-                    selected_bg
-                        .fg(val_color)
-                        .add_modifier(Modifier::BOLD),
+                    selected_bg.fg(val_color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    " ►",
-                    selected_bg.add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ►", selected_bg.add_modifier(Modifier::BOLD)),
                 // pad the rest of the line with the selected background
                 Span::styled("  ", selected_bg),
             ]));
@@ -111,17 +124,18 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
                 Span::styled("  ", normal_style),
                 Span::styled(
                     value,
-                    Style::default()
-                        .fg(val_color)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(val_color).add_modifier(Modifier::BOLD),
                 ),
             ]));
         }
     }
     info_lines.push(Line::from(""));
 
-    let info = Paragraph::new(info_lines)
-        .block(Block::default().borders(Borders::ALL).title(" Review Config "));
+    let info = Paragraph::new(info_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Review Config "),
+    );
     f.render_widget(info, chunks[1]);
 
     // Action hint
@@ -199,7 +213,10 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(if en { " Status: " } else { " 状态: " }, Style::default().fg(Color::Gray)),
+            Span::styled(
+                if en { " Status: " } else { " 状态: " },
+                Style::default().fg(Color::Gray),
+            ),
             Span::styled(
                 phase_text,
                 Style::default()
@@ -207,7 +224,10 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
-            Span::styled(if en { "Round: " } else { "轮次: " }, Style::default().fg(Color::Gray)),
+            Span::styled(
+                if en { "Round: " } else { "轮次: " },
+                Style::default().fg(Color::Gray),
+            ),
             Span::styled(
                 format!("{}/{}", state.current_round, state.max_rounds),
                 Style::default()
@@ -215,7 +235,10 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
-            Span::styled(if en { "Exchange: " } else { "讨论: " }, Style::default().fg(Color::Gray)),
+            Span::styled(
+                if en { "Exchange: " } else { "讨论: " },
+                Style::default().fg(Color::Gray),
+            ),
             Span::styled(
                 format!("{}/{}", state.current_exchange, state.max_exchanges),
                 Style::default()
@@ -225,19 +248,34 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
         ]),
         {
             let mut hint_spans = vec![
-                Span::styled(if en { " Elapsed: " } else { " 已用时: " }, Style::default().fg(Color::Gray)),
+                Span::styled(
+                    if en { " Elapsed: " } else { " 已用时: " },
+                    Style::default().fg(Color::Gray),
+                ),
                 Span::styled(elapsed, Style::default().fg(Color::White)),
                 Span::raw("  │  "),
-                Span::styled(if en { "" } else { "按 " }, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if en { "" } else { "按 " },
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled("q", Style::default().fg(Color::Yellow)),
-                Span::styled(if en { " Quit, " } else { " 退出, " }, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if en { " Quit, " } else { " 退出, " },
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled("↑↓", Style::default().fg(Color::Yellow)),
-                Span::styled(if en { " Scroll" } else { " 滚动" }, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if en { " Scroll" } else { " 滚动" },
+                    Style::default().fg(Color::DarkGray),
+                ),
             ];
             if state.finished {
                 hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
                 hint_spans.push(Span::styled("r", Style::default().fg(Color::Yellow)));
-                hint_spans.push(Span::styled(if en { " Restart" } else { " 重新开始" }, Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled(
+                    if en { " Restart" } else { " 重新开始" },
+                    Style::default().fg(Color::DarkGray),
+                ));
             } else if state.phase == Phase::WaitingForApply {
                 hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
                 hint_spans.push(Span::styled(
@@ -246,7 +284,10 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ));
-                hint_spans.push(Span::styled(if en { " Apply" } else { " 执行修改" }, Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled(
+                    if en { " Apply" } else { " 执行修改" },
+                    Style::default().fg(Color::DarkGray),
+                ));
             } else if state.phase == Phase::WaitingForMerge {
                 hint_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
                 hint_spans.push(Span::styled(
@@ -255,7 +296,10 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ));
-                hint_spans.push(Span::styled(if en { " Merge" } else { " 合并分支" }, Style::default().fg(Color::DarkGray)));
+                hint_spans.push(Span::styled(
+                    if en { " Merge" } else { " 合并分支" },
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
             Line::from(hint_spans)
         },
@@ -263,7 +307,11 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(if en { " MDTalk Dashboard " } else { " MDTalk 仪表盘 " })
+        .title(if en {
+            " MDTalk Dashboard "
+        } else {
+            " MDTalk 仪表盘 "
+        })
         .title_style(
             Style::default()
                 .fg(Color::Cyan)
@@ -316,7 +364,11 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         })
         .collect();
 
-    let conv_block = Block::default().borders(Borders::ALL).title(if en { " Conversation " } else { " 对话预览 " });
+    let conv_block = Block::default().borders(Borders::ALL).title(if en {
+        " Conversation "
+    } else {
+        " 对话预览 "
+    });
     let conv_paragraph = Paragraph::new(conv_lines)
         .block(conv_block)
         .wrap(Wrap { trim: false });
@@ -339,15 +391,27 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
     };
     let agent_b_status = match state.phase {
         Phase::AgentBResponding => Span::styled(
-            if en { "● Responding" } else { "● 回应中" },
+            if en {
+                "● Responding"
+            } else {
+                "● 回应中"
+            },
             Style::default().fg(Color::Green),
         ),
         Phase::WaitingForApply => Span::styled(
-            if en { "⏸ Awaiting" } else { "⏸ 等待确认" },
+            if en {
+                "⏸ Awaiting"
+            } else {
+                "⏸ 等待确认"
+            },
             Style::default().fg(Color::Yellow),
         ),
         Phase::ApplyChanges => Span::styled(
-            if en { "● Applying" } else { "● 修改代码中" },
+            if en {
+                "● Applying"
+            } else {
+                "● 修改代码中"
+            },
             Style::default().fg(Color::Yellow),
         ),
         Phase::WaitingForMerge => Span::styled(
@@ -379,7 +443,11 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            if en { " Round Times:" } else { " 轮次耗时:" },
+            if en {
+                " Round Times:"
+            } else {
+                " 轮次耗时:"
+            },
             Style::default()
                 .fg(Color::Gray)
                 .add_modifier(Modifier::BOLD),
@@ -408,7 +476,11 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         )));
     }
 
-    let status_block = Block::default().borders(Borders::ALL).title(if en { " Agent Status " } else { " Agent 状态 " });
+    let status_block = Block::default().borders(Borders::ALL).title(if en {
+        " Agent Status "
+    } else {
+        " Agent 状态 "
+    });
     let status_paragraph = Paragraph::new(status_lines).block(status_block);
     f.render_widget(status_paragraph, chunks[1]);
 }
@@ -424,7 +496,10 @@ fn draw_logs(f: &mut Frame, app: &DashboardApp, area: Rect) {
         .map(|log| Line::from(format!(" {log}")))
         .collect();
 
-    let block = Block::default().borders(Borders::ALL).title(if en { " Logs " } else { " 日志 " });
+    let block =
+        Block::default()
+            .borders(Borders::ALL)
+            .title(if en { " Logs " } else { " 日志 " });
     let paragraph = Paragraph::new(log_lines).block(block);
     f.render_widget(paragraph, area);
 }

@@ -68,29 +68,25 @@ async fn main() -> Result<()> {
         return dashboard::render_demo();
     }
 
-    // Load config: from file if provided, otherwise from CLI args
-    let cfg = if let Some(config_path) = &cli.config {
+    // Load config base:
+    // - if --config is provided: load it explicitly
+    // - else require --project and start from defaults
+    let mut cfg = if let Some(config_path) = &cli.config {
         config::MdtalkConfig::load(config_path)?
     } else if let Some(project_path) = &cli.project {
-        config::MdtalkConfig::from_cli(
-            project_path.clone(),
-            cli.agent_a.clone(),
-            cli.agent_b.clone(),
-            cli.max_rounds,
-            cli.max_exchanges,
-        )
+        config::MdtalkConfig::from_cli(project_path.clone(), None, None, None, None)
     } else {
-        // Try loading from default mdtalk.toml in current directory
-        let default_path = PathBuf::from("mdtalk.toml");
-        if default_path.exists() {
-            config::MdtalkConfig::load(&default_path)?
-        } else {
-            anyhow::bail!(
-                "未指定项目。请使用 --project <路径> 或 --config <路径>，\
-                 或在当前目录创建 mdtalk.toml 配置文件。"
-            );
-        }
+        anyhow::bail!("未指定项目。请使用 --project <路径> 或 --config <路径>。");
     };
+
+    // CLI overrides always win over defaults/file.
+    cfg.apply_cli_overrides(
+        cli.project.clone(),
+        cli.agent_a.clone(),
+        cli.agent_b.clone(),
+        cli.max_rounds,
+        cli.max_exchanges,
+    )?;
 
     if cli.no_dashboard {
         // No-dashboard mode: set up tracing to stdout and just run the orchestrator
@@ -131,7 +127,15 @@ async fn main() -> Result<()> {
 
             let apply_level = cli.apply_level;
             let mut orchestrator_handle = tokio::spawn(async move {
-                orchestrator::run(cfg_clone, state_tx, no_apply, apply_level, Some(start_rx), Some(cmd_rx)).await
+                orchestrator::run(
+                    cfg_clone,
+                    state_tx,
+                    no_apply,
+                    apply_level,
+                    Some(start_rx),
+                    Some(cmd_rx),
+                )
+                .await
             });
 
             let state_rx_main = state_rx.clone();
@@ -180,7 +184,9 @@ async fn main() -> Result<()> {
             // Print merge instructions if branch was kept (not merged)
             {
                 let final_state = state_rx_main.borrow();
-                if let (Some(rb), Some(ob)) = (&final_state.review_branch, &final_state.original_branch) {
+                if let (Some(rb), Some(ob)) =
+                    (&final_state.review_branch, &final_state.original_branch)
+                {
                     eprintln!();
                     eprintln!("─── Branch Mode ───");
                     eprintln!("Changes on branch: {rb}");

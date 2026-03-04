@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -47,28 +48,121 @@ async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Resu
     Ok(())
 }
 
+/// Collect changed paths from git status, including untracked files.
+async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
+    let output = TokioCommand::new("git")
+        .args(["status", "--porcelain", "-z"])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git status --porcelain -z failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let mut paths = HashSet::new();
+    let mut entries = output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|entry| !entry.is_empty());
+
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+
+        let status_x = entry[0] as char;
+        let status_y = entry[1] as char;
+        let path = String::from_utf8_lossy(&entry[3..]).to_string();
+        if !path.is_empty() {
+            paths.insert(path);
+        }
+
+        // In porcelain -z mode, renames/copies are followed by an extra path token.
+        if (matches!(status_x, 'R' | 'C') || matches!(status_y, 'R' | 'C'))
+            && let Some(next_path) = entries.next()
+        {
+            let next = String::from_utf8_lossy(next_path).to_string();
+            if !next.is_empty() {
+                paths.insert(next);
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+/// Reset index to HEAD (keep working tree untouched).
+async fn git_reset_index(project_path: &Path) -> Result<()> {
+    let output = TokioCommand::new("git")
+        .args(["reset", "--quiet"])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git reset --quiet failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Stage the provided paths.
+async fn git_add_paths(project_path: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut cmd = TokioCommand::new("git");
+    cmd.arg("add");
+    cmd.arg("--");
+    cmd.args(paths);
+    let output = cmd
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git add (selected paths) failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GitCommitOutcome {
     Committed,
     NothingToCommit,
 }
 
-/// Stage all changes and commit.
-/// Returns whether a commit was created.
-async fn git_commit_all(project_path: &Path, message: &str) -> Result<GitCommitOutcome> {
-    let add_output = TokioCommand::new("git")
-        .args(["add", "-A"])
-        .current_dir(project_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await?;
-    if !add_output.status.success() {
-        anyhow::bail!(
-            "git add -A failed: {}",
-            String::from_utf8_lossy(&add_output.stderr).trim()
-        );
+/// Stage and commit changes while excluding paths that were already dirty before session start.
+async fn git_commit_filtered(
+    project_path: &Path,
+    message: &str,
+    excluded_paths: &HashSet<String>,
+) -> Result<GitCommitOutcome> {
+    let mut paths_to_stage: Vec<String> = git_status_paths(project_path)
+        .await?
+        .into_iter()
+        .filter(|path| !excluded_paths.contains(path))
+        .collect();
+    paths_to_stage.sort_unstable();
+    if paths_to_stage.is_empty() {
+        return Ok(GitCommitOutcome::NothingToCommit);
     }
+
+    git_reset_index(project_path).await?;
+    git_add_paths(project_path, &paths_to_stage).await?;
 
     let staged_diff = TokioCommand::new("git")
         .args(["diff", "--cached", "--quiet"])
@@ -96,8 +190,12 @@ async fn git_commit_all(project_path: &Path, message: &str) -> Result<GitCommitO
         .output()
         .await?;
     if !commit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&commit_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_string();
         let details = if stderr.is_empty() { stdout } else { stderr };
         anyhow::bail!("git commit -m failed: {details}");
     }
@@ -227,6 +325,9 @@ pub enum Phase {
     Done,
 }
 
+const MAX_LOG_LINES: usize = 200;
+const PREVIEW_TAIL_LINES: usize = 300;
+
 impl std::fmt::Display for Phase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -260,7 +361,11 @@ fn consume_shutdown_command(
                 Ok(OrchestratorCommand::Shutdown) => {
                     state.phase = Phase::Done;
                     state.finished = true;
-                    state.log(if state.is_en() { "Shutdown received, ending session" } else { "收到停止信号，提前结束本次会话" });
+                    state.log(if state.is_en() {
+                        "Shutdown received, ending session"
+                    } else {
+                        "收到停止信号，提前结束本次会话"
+                    });
                     let _ = state_tx.send(state.clone());
                     return true;
                 }
@@ -303,11 +408,15 @@ impl OrchestratorState {
     fn log(&mut self, msg: &str) {
         let now = chrono::Local::now().format("%H:%M:%S");
         self.logs.push(format!("[{now}] {msg}"));
+        if self.logs.len() > MAX_LOG_LINES {
+            let to_drop = self.logs.len() - MAX_LOG_LINES;
+            self.logs.drain(0..to_drop);
+        }
     }
 
     fn update_preview(&mut self, conversation: &Conversation) {
-        if let Ok(full) = conversation.read_all() {
-            self.conversation_preview = full;
+        if let Ok(tail) = conversation.read_tail_lines(PREVIEW_TAIL_LINES) {
+            self.conversation_preview = tail;
         }
     }
 }
@@ -330,6 +439,7 @@ pub async fn run(
     let mut branch_mode = false;
     let mut original_branch: Option<String> = None;
     let mut review_branch: Option<String> = None;
+    let mut initial_dirty_paths: HashSet<String> = HashSet::new();
 
     // Wait for dashboard confirmation if a start signal receiver is provided
     if let Some(rx) = start_rx {
@@ -355,7 +465,11 @@ pub async fn run(
     }
 
     state.session_start = Some(Instant::now());
-    state.log(if state.is_en() { "MDTalk session started" } else { "MDTalk 会话启动" });
+    state.log(if state.is_en() {
+        "MDTalk session started"
+    } else {
+        "MDTalk 会话启动"
+    });
     let _ = state_tx.send(state.clone());
 
     let project_path: PathBuf = config.project.path.clone();
@@ -367,6 +481,29 @@ pub async fn run(
     // Validate project path
     if !project_path.is_dir() {
         anyhow::bail!("项目路径 {:?} 不存在或不是目录", project_path);
+    }
+
+    // Branch mode: create isolated review branch before writing any session files.
+    if branch_mode {
+        match git_current_branch(&project_path).await {
+            Some(branch) => {
+                original_branch = Some(branch);
+                let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                let new_branch = format!("mdtalk/review-{ts}");
+                git_checkout_new_branch(&project_path, &new_branch).await?;
+                review_branch = Some(new_branch.clone());
+                state.log(&if state.is_en() {
+                    format!("Branch mode: created branch {new_branch}")
+                } else {
+                    format!("分支模式: 已创建分支 {new_branch}")
+                });
+                initial_dirty_paths = git_status_paths(&project_path).await?;
+                let _ = state_tx.send(state.clone());
+            }
+            None => {
+                anyhow::bail!("分支模式: 当前目录不是 git 仓库，无法创建隔离分支");
+            }
+        }
     }
 
     // Create conversation file in the project directory
@@ -381,9 +518,15 @@ pub async fn run(
     for round in 1..=config.review.max_rounds {
         state.current_round = round;
         state.log(&if state.is_en() {
-            format!("===== Round {round} started ({} total) =====", config.review.max_rounds)
+            format!(
+                "===== Round {round} started ({} total) =====",
+                config.review.max_rounds
+            )
         } else {
-            format!("===== 第{round}轮审查开始 (共{}轮) =====", config.review.max_rounds)
+            format!(
+                "===== 第{round}轮审查开始 (共{}轮) =====",
+                config.review.max_rounds
+            )
         });
         let _ = state_tx.send(state.clone());
 
@@ -419,7 +562,10 @@ pub async fn run(
             state.log(&if state.is_en() {
                 format!("R{round} E{exchange}: Agent A ({}) reviewing", agent_a.name)
             } else {
-                format!("第{round}轮 讨论{exchange}: Agent A ({}) 开始审查", agent_a.name)
+                format!(
+                    "第{round}轮 讨论{exchange}: Agent A ({}) 开始审查",
+                    agent_a.name
+                )
             });
             let _ = state_tx.send(state.clone());
 
@@ -475,9 +621,15 @@ pub async fn run(
                     };
                     conversation.append_agent_entry(&agent_a.name, label, &output.content)?;
                     state.log(&if state.is_en() {
-                        format!("R{round} E{exchange}: Agent A done ({:.0}s)", output.duration.as_secs_f64())
+                        format!(
+                            "R{round} E{exchange}: Agent A done ({:.0}s)",
+                            output.duration.as_secs_f64()
+                        )
                     } else {
-                        format!("第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)", output.duration.as_secs_f64())
+                        format!(
+                            "第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)",
+                            output.duration.as_secs_f64()
+                        )
                     });
                 }
                 Err(e) => {
@@ -501,9 +653,15 @@ pub async fn run(
             // --- Agent B responds ---
             state.phase = Phase::AgentBResponding;
             state.log(&if state.is_en() {
-                format!("R{round} E{exchange}: Agent B ({}) responding", agent_b.name)
+                format!(
+                    "R{round} E{exchange}: Agent B ({}) responding",
+                    agent_b.name
+                )
             } else {
-                format!("第{round}轮 讨论{exchange}: Agent B ({}) 开始回应", agent_b.name)
+                format!(
+                    "第{round}轮 讨论{exchange}: Agent B ({}) 开始回应",
+                    agent_b.name
+                )
             });
             let _ = state_tx.send(state.clone());
 
@@ -534,9 +692,15 @@ pub async fn run(
                     last_b_response = output.content.clone();
                     conversation.append_agent_entry(&agent_b.name, "回应", &output.content)?;
                     state.log(&if state.is_en() {
-                        format!("R{round} E{exchange}: Agent B done ({:.0}s)", output.duration.as_secs_f64())
+                        format!(
+                            "R{round} E{exchange}: Agent B done ({:.0}s)",
+                            output.duration.as_secs_f64()
+                        )
                     } else {
-                        format!("第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)", output.duration.as_secs_f64())
+                        format!(
+                            "第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)",
+                            output.duration.as_secs_f64()
+                        )
                     });
                 }
                 Err(e) => {
@@ -601,9 +765,15 @@ pub async fn run(
             state.phase = Phase::Done;
             state.finished = true;
             state.log(&if state.is_en() {
-                format!("Round {round}: no consensus after {} exchanges, review ended", config.review.max_exchanges)
+                format!(
+                    "Round {round}: no consensus after {} exchanges, review ended",
+                    config.review.max_exchanges
+                )
             } else {
-                format!("第{round}轮: {}次讨论后仍未达成共识，审查结束", config.review.max_exchanges)
+                format!(
+                    "第{round}轮: {}次讨论后仍未达成共识，审查结束",
+                    config.review.max_exchanges
+                )
             });
             state.update_preview(&conversation);
             let _ = state_tx.send(state.clone());
@@ -650,7 +820,11 @@ pub async fn run(
                 if shutdown_requested {
                     state.phase = Phase::Done;
                     state.finished = true;
-                    state.log(if state.is_en() { "Shutdown received, ending session" } else { "收到停止信号，提前结束本次会话" });
+                    state.log(if state.is_en() {
+                        "Shutdown received, ending session"
+                    } else {
+                        "收到停止信号，提前结束本次会话"
+                    });
                     state.update_preview(&conversation);
                     let _ = state_tx.send(state.clone());
                     return Ok(());
@@ -666,16 +840,16 @@ pub async fn run(
                     // Skip to next round or finish
                     if round == config.review.max_rounds {
                         state.log(&if state.is_en() {
-                        format!("All {} rounds completed", config.review.max_rounds)
-                    } else {
-                        format!("已完成全部{}轮审查", config.review.max_rounds)
-                    });
+                            format!("All {} rounds completed", config.review.max_rounds)
+                        } else {
+                            format!("已完成全部{}轮审查", config.review.max_rounds)
+                        });
                     } else {
                         state.log(&if state.is_en() {
-                        format!("Round {round} done, next round...")
-                    } else {
-                        format!("第{round}轮完成，进入下一轮...")
-                    });
+                            format!("Round {round} done, next round...")
+                        } else {
+                            format!("第{round}轮完成，进入下一轮...")
+                        });
                         let _ = state_tx.send(state.clone());
                     }
                     continue;
@@ -692,52 +866,6 @@ pub async fn run(
                 return Ok(());
             }
 
-            // Branch mode: create review branch before the first apply
-            if branch_mode && review_branch.is_none() {
-                match git_current_branch(&project_path).await {
-                    Some(branch) => {
-                        original_branch = Some(branch);
-                        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                        let new_branch = format!("mdtalk/review-{ts}");
-                        match git_checkout_new_branch(&project_path, &new_branch).await {
-                            Ok(()) => {
-                                state.log(&if state.is_en() {
-                                    format!("Branch mode: created branch {new_branch}")
-                                } else {
-                                    format!("分支模式: 已创建分支 {new_branch}")
-                                });
-                                review_branch = Some(new_branch);
-                            }
-                            Err(e) => {
-                                state.log(&if state.is_en() {
-                                    format!("Branch mode: failed to create branch: {e}")
-                                } else {
-                                    format!("分支模式: 创建分支失败: {e}")
-                                });
-                                state.update_preview(&conversation);
-                                let _ = state_tx.send(state.clone());
-                                return Err(anyhow::anyhow!(
-                                    "分支模式: 创建审查分支失败，已停止修改: {e}"
-                                ));
-                            }
-                        }
-                    }
-                    None => {
-                        state.log(if state.is_en() {
-                            "Branch mode: not a git repo, stopping apply"
-                        } else {
-                            "分支模式: 非 git 仓库，停止修改"
-                        });
-                        state.update_preview(&conversation);
-                        let _ = state_tx.send(state.clone());
-                        return Err(anyhow::anyhow!(
-                            "分支模式: 当前目录不是 git 仓库，无法创建隔离分支"
-                        ));
-                    }
-                }
-                let _ = state_tx.send(state.clone());
-            }
-
             state.phase = Phase::ApplyChanges;
             state.log(&if state.is_en() {
                 format!("Round {round}: Agent B applying changes...")
@@ -747,9 +875,13 @@ pub async fn run(
             let _ = state_tx.send(state.clone());
 
             let apply_instruction = match apply_level {
-                2 => "选择高优先级和中优先级问题，阅读相关的源代码文件并直接修改代码来修复这些问题。低优先级问题暂不处理。",
+                2 => {
+                    "选择高优先级和中优先级问题，阅读相关的源代码文件并直接修改代码来修复这些问题。低优先级问题暂不处理。"
+                }
                 3 => "修复所有已达成共识的问题，阅读相关的源代码文件并直接修改代码。",
-                _ => "选择所有高优先级问题，阅读相关的源代码文件并直接修改代码来修复。中低优先级问题暂不处理。",
+                _ => {
+                    "选择所有高优先级问题，阅读相关的源代码文件并直接修改代码来修复。中低优先级问题暂不处理。"
+                }
             };
             let apply_prompt = format!(
                 "双方已达成共识。请先阅读当前目录下的 {conv_filename} 文件了解完整审查对话，\
@@ -773,21 +905,31 @@ pub async fn run(
                         crate::conversation::append_changelog(&project_path, round, &output.content)
                     {
                         state.log(&if state.is_en() {
-                        format!("Failed to write review_changelog.md: {e}")
-                    } else {
-                        format!("写入 review_changelog.md 失败: {e}")
-                    });
+                            format!("Failed to write review_changelog.md: {e}")
+                        } else {
+                            format!("写入 review_changelog.md 失败: {e}")
+                        });
                         state.update_preview(&conversation);
                         let _ = state_tx.send(state.clone());
                         return Err(anyhow::anyhow!(
                             "第{round}轮: 写入 review_changelog.md 失败: {e}"
                         ));
                     }
-                    state.log(if state.is_en() { "review_changelog.md updated" } else { "review_changelog.md 已更新" });
-                    state.log(&if state.is_en() {
-                        format!("Round {round}: Agent B apply done ({:.0}s)", output.duration.as_secs_f64())
+                    state.log(if state.is_en() {
+                        "review_changelog.md updated"
                     } else {
-                        format!("第{round}轮: Agent B 已完成代码修改 ({:.0}秒)", output.duration.as_secs_f64())
+                        "review_changelog.md 已更新"
+                    });
+                    state.log(&if state.is_en() {
+                        format!(
+                            "Round {round}: Agent B apply done ({:.0}s)",
+                            output.duration.as_secs_f64()
+                        )
+                    } else {
+                        format!(
+                            "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
+                            output.duration.as_secs_f64()
+                        )
                     });
                 }
                 Err(e) => {
@@ -809,24 +951,30 @@ pub async fn run(
         // Check if this was the last round
         if round == config.review.max_rounds {
             state.log(&if state.is_en() {
-                        format!("All {} rounds completed", config.review.max_rounds)
-                    } else {
-                        format!("已完成全部{}轮审查", config.review.max_rounds)
-                    });
+                format!("All {} rounds completed", config.review.max_rounds)
+            } else {
+                format!("已完成全部{}轮审查", config.review.max_rounds)
+            });
         } else {
             state.log(&if state.is_en() {
-                        format!("Round {round} done, next round...")
-                    } else {
-                        format!("第{round}轮完成，进入下一轮...")
-                    });
+                format!("Round {round} done, next round...")
+            } else {
+                format!("第{round}轮完成，进入下一轮...")
+            });
             let _ = state_tx.send(state.clone());
         }
     }
 
     // Branch mode: commit changes and wait for merge decision
     if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
-        // Auto-commit all changes on the review branch
-        match git_commit_all(&project_path, &format!("mdtalk: review changes on {rb}")).await {
+        // Auto-commit only session-created changes on the review branch.
+        match git_commit_filtered(
+            &project_path,
+            &format!("mdtalk: review changes on {rb}"),
+            &initial_dirty_paths,
+        )
+        .await
+        {
             Ok(GitCommitOutcome::Committed) => {
                 state.log(&if state.is_en() {
                     format!("Changes committed on branch {rb}")
@@ -879,7 +1027,11 @@ pub async fn run(
         }
 
         if do_merge {
-            state.log(if state.is_en() { "Merging..." } else { "正在合并..." });
+            state.log(if state.is_en() {
+                "Merging..."
+            } else {
+                "正在合并..."
+            });
             let _ = state_tx.send(state.clone());
             match git_checkout_and_merge(&project_path, ob, rb).await {
                 Ok(()) => {
@@ -915,14 +1067,16 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command as StdCommand;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use tokio::sync::watch;
 
     use super::{
-        ExchangeKind, OrchestratorState, classify_exchange, git_commit_all, run,
+        ExchangeKind, OrchestratorState, classify_exchange, git_commit_filtered, run,
         should_append_round_header,
     };
     use crate::config::{
@@ -937,6 +1091,20 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("failed to create test dir");
         dir
+    }
+
+    fn git_must_succeed(dir: &Path, args: &[&str]) {
+        let output = StdCommand::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("failed to run git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[cfg(windows)]
@@ -1007,41 +1175,41 @@ mod tests {
     fn script_always_fail(dir: &Path, name: &str) -> String {
         #[cfg(windows)]
         {
-            return write_script(dir, name, "echo failed 1>&2\r\nexit /b 1");
+            write_script(dir, name, "echo failed 1>&2\r\nexit /b 1")
         }
         #[cfg(unix)]
         {
-            return write_script(dir, name, "echo failed >&2\nexit 1");
+            write_script(dir, name, "echo failed >&2\nexit 1")
         }
     }
 
     fn script_always_agree(dir: &Path, name: &str) -> String {
         #[cfg(windows)]
         {
-            return write_script(dir, name, "echo I agree\r\nexit /b 0");
+            write_script(dir, name, "echo I agree\r\nexit /b 0")
         }
         #[cfg(unix)]
         {
-            return write_script(dir, name, "echo \"I agree\"\nexit 0");
+            write_script(dir, name, "echo \"I agree\"\nexit 0")
         }
     }
 
     fn script_fail_on_second_invocation(dir: &Path, name: &str) -> String {
         #[cfg(windows)]
         {
-            return write_script(
+            write_script(
                 dir,
                 name,
                 "set MARKER_FILE=%~dp0agent_b_called_once.flag\r\nif exist \"%MARKER_FILE%\" (\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\necho called>\"%MARKER_FILE%\"\r\necho I agree\r\nexit /b 0",
-            );
+            )
         }
         #[cfg(unix)]
         {
-            return write_script(
+            write_script(
                 dir,
                 name,
                 "MARKER_FILE=\"$(dirname \"$0\")/agent_b_called_once.flag\"\nif [ -f \"$MARKER_FILE\" ]; then\n  echo \"apply failed\" >&2\n  exit 1\nfi\necho called > \"$MARKER_FILE\"\necho \"I agree\"\nexit 0",
-            );
+            )
         }
     }
 
@@ -1108,18 +1276,115 @@ mod tests {
             result.is_err(),
             "Branch mode must fail fast when review branch cannot be created"
         );
+        assert!(
+            !project_dir.join("conversation.md").exists(),
+            "Branch setup should run before creating conversation.md in branch mode"
+        );
         let _ = fs::remove_dir_all(project_dir);
     }
 
     #[tokio::test]
-    async fn git_commit_all_returns_error_outside_git_repo() {
+    async fn branch_mode_commit_excludes_preexisting_dirty_files() {
+        let project_dir = unique_test_dir("branch-mode-dirty-filter");
+        git_must_succeed(&project_dir, &["init"]);
+        git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
+        git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
+
+        fs::write(project_dir.join("preexisting.txt"), "base\n")
+            .expect("failed to write base file");
+        git_must_succeed(&project_dir, &["add", "preexisting.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base"]);
+
+        // Dirty change exists before the orchestrator starts.
+        fs::write(
+            project_dir.join("preexisting.txt"),
+            "dirty-before-session\n",
+        )
+        .expect("failed to write preexisting dirty file");
+
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_ok_cmd.clone());
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        start_tx
+            .send(start_config(a_ok_cmd, b_ok_cmd, true))
+            .expect("failed to send start config");
+
+        let result = run(cfg, state_tx, true, 1, Some(start_rx), None).await;
+        assert!(result.is_ok(), "run should succeed in branch mode");
+
+        let final_state = state_rx.borrow().clone();
+        assert!(
+            final_state.review_branch.is_some() && final_state.original_branch.is_some(),
+            "branch mode should keep merge info when no merge command is sent"
+        );
+
+        let show_output = StdCommand::new("git")
+            .args(["show", "--name-only", "--pretty=format:"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to inspect latest commit");
+        assert!(
+            show_output.status.success(),
+            "git show failed: {}",
+            String::from_utf8_lossy(&show_output.stderr)
+        );
+        let changed_files = String::from_utf8_lossy(&show_output.stdout);
+        assert!(
+            changed_files
+                .lines()
+                .any(|line| line.trim() == "conversation.md"),
+            "session commit should include conversation.md"
+        );
+        assert!(
+            !changed_files
+                .lines()
+                .any(|line| line.trim() == "preexisting.txt"),
+            "session commit should not include dirty changes that existed before the session"
+        );
+
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn git_commit_filtered_returns_error_outside_git_repo() {
         let project_dir = unique_test_dir("git-commit-non-git");
         fs::write(project_dir.join("file.txt"), "content").expect("failed to write test file");
 
-        let result = git_commit_all(&project_dir, "test commit").await;
+        let result = git_commit_filtered(&project_dir, "test commit", &HashSet::new()).await;
         assert!(
             result.is_err(),
-            "git_commit_all should fail when git add/commit fails"
+            "git_commit_filtered should fail when git status cannot run"
+        );
+
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[test]
+    fn state_logs_are_bounded() {
+        let project_dir = unique_test_dir("state-log-cap");
+        let cfg = test_config(
+            project_dir.clone(),
+            "agent_a_cmd".to_string(),
+            "agent_b_cmd".to_string(),
+        );
+        let mut state = OrchestratorState::new(&cfg);
+
+        for i in 0..400 {
+            state.log(&format!("log line {i}"));
+        }
+
+        assert!(
+            state.logs.len() <= 200,
+            "logs should be capped to keep state cloning bounded"
+        );
+        assert!(
+            state
+                .logs
+                .last()
+                .is_some_and(|line| line.contains("log line 399")),
+            "latest logs should be kept"
         );
 
         let _ = fs::remove_dir_all(project_dir);
