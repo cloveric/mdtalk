@@ -287,7 +287,9 @@ pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusRes
 }
 
 /// Check consensus based on Agent B's response only, accepting ONLY full agreement.
-/// Used for exchange 1 when max_exchanges > 1: partial agreement means "keep discussing".
+/// No longer used in orchestrator (exchange 1 now skips consensus entirely when
+/// max_exchanges > 1), but kept for tests and potential future use.
+#[allow(dead_code)]
 pub fn check_b_full_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
     // Filter out partial-agreement keywords (those containing "部分" or "partial")
     let full_keywords: Vec<String> = keywords

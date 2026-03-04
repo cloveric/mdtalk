@@ -833,20 +833,27 @@ async fn run_exchange(
     let _ = state_tx.send(state.clone());
 
     let is_last = exchange == config.review.max_exchanges;
-    let result = if is_last {
+    let is_first_with_more = exchange == 1 && config.review.max_exchanges > 1;
+    let result = if is_first_with_more {
+        // Exchange 1 with more rounds available: skip consensus check entirely.
+        // B's agreement here only means "A's findings are valid", not "debate is done".
+        // Force at least one more exchange so A can respond to B's verification.
+        state.log(&i18n!(
+            state,
+            format!("R{round} E{exchange}: skipping consensus (more exchanges available)"),
+            format!("第{round}轮 讨论{exchange}: 跳过共识检测（还有后续讨论）")
+        ));
+        consensus::ConsensusResult {
+            reached: false,
+            summary: String::new(),
+        }
+    } else if is_last {
         let Some(last_b_response) = last_b_response.as_deref() else {
             return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
                 "internal error: missing Agent B response at consensus stage"
             )));
         };
         consensus::check_b_only(last_b_response, &config.review.consensus_keywords)
-    } else if exchange == 1 {
-        let Some(last_b_response) = last_b_response.as_deref() else {
-            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
-                "internal error: missing Agent B response at consensus stage"
-            )));
-        };
-        consensus::check_b_full_only(last_b_response, &config.review.consensus_keywords)
     } else {
         let (Some(last_a_response), Some(last_b_response)) =
             (last_a_response.as_deref(), last_b_response.as_deref())
