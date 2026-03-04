@@ -355,7 +355,9 @@ Steps:\n\
 3. Output your complete review response directly in this format:\n\
    - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
    - Add any missed issues\n\
-   - End with a summary; if you agree overall, explicitly write \"I agree\" or \"consensus\"\n\n\
+   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
+     If you agree overall: write exactly → CONCLUSION: I agree\n\
+     If you disagree: write exactly → CONCLUSION: I disagree\n\n\
 Important: output the full review content directly; do not only report which files you read."
         );
     }
@@ -368,7 +370,9 @@ Important: output the full review content directly; do not only report which fil
 3. 直接输出你的完整审查回应，格式如下：\n\
    - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
    - 补充任何审查者遗漏的新问题\n\
-   - 在最后给出总结，如果你整体同意，请明确写 \"I agree\" 或 \"同意\"\n\n\
+   - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
+     如果你整体认可审查意见：写 → 结论：同意\n\
+     如果你存在重大分歧：写 → 结论：不同意\n\n\
 重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
     )
 }
@@ -708,8 +712,7 @@ pub async fn run(
         let mut consensus_reached = false;
         let mut execution_error: Option<anyhow::Error> = None;
 
-        #[allow(unused_assignments)]
-        let mut last_a_response = String::new();
+        let mut last_a_response = String::new(); // retained for future multi-exchange use
         #[allow(unused_assignments)]
         let mut last_b_response = String::new();
 
@@ -762,7 +765,7 @@ pub async fn run(
             .await
             {
                 Ok(output) => {
-                    last_a_response = output.content.clone();
+                    let _ = std::mem::replace(&mut last_a_response, output.content.clone());
                     let label = discussion_role_label(exchange_kind, state.is_en());
                     conversation.append_agent_entry(&agent_a.name, label, &output.content)?;
                     state.log(&if state.is_en() {
@@ -883,11 +886,16 @@ pub async fn run(
             state.phase = Phase::CheckConsensus;
             let _ = state_tx.send(state.clone());
 
-            let result = consensus::check_consensus(
-                &last_a_response,
-                &last_b_response,
-                &config.review.consensus_keywords,
-            );
+            // Consensus is determined solely by Agent B (the verifier).
+            // Agent A proposes issues; it is not expected to say "I agree".
+            // Only Agent B, after cross-checking the source, needs to express agreement.
+            let result = consensus::ConsensusResult {
+                reached: consensus::agent_shows_consensus(
+                    &last_b_response,
+                    &config.review.consensus_keywords,
+                ),
+                summary: "Agent B 通过共识关键词确认了审查意见。".to_string(),
+            };
 
             if result.reached {
                 state.log(&if state.is_en() {

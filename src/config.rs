@@ -83,6 +83,9 @@ fn default_consensus_keywords() -> Vec<String> {
         "no further".to_string(),
         "looks good".to_string(),
         "LGTM".to_string(),
+        // Phrases matched by the mandatory conclusion line injected into Agent B's prompt:
+        "CONCLUSION: I agree".to_string(),
+        "结论：同意".to_string(),
     ]
 }
 fn default_output_file() -> String {

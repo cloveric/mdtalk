@@ -212,7 +212,7 @@ fn has_negated_keyword(text: &str, keyword: &str) -> bool {
 /// Check whether an agent's response shows unambiguous consensus.
 /// Returns false if the response contains mixed signals (both affirmative
 /// and negated consensus keywords).
-fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
+pub fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
     if contains_explicit_disagreement(response) {
         return false;
     }
@@ -229,6 +229,7 @@ fn agent_shows_consensus(response: &str, keywords: &[String]) -> bool {
 }
 
 /// Check whether the latest round's content indicates consensus.
+#[allow(dead_code)]
 pub fn check_consensus(
     agent_a_response: &str,
     agent_b_response: &str,
