@@ -21,6 +21,7 @@
 
 <p>
   <a href="#-about">About</a> &nbsp;·&nbsp;
+  <a href="#-work-interface">Work Interface</a> &nbsp;·&nbsp;
   <a href="#-quick-start">Quick Start</a> &nbsp;·&nbsp;
   <a href="#-how-it-works">How It Works</a> &nbsp;·&nbsp;
   <a href="#-configuration">Configuration</a> &nbsp;·&nbsp;
@@ -65,6 +66,15 @@ We ran MDTalk on its own codebase. Agent A (Claude) found 13 issues. Agent B (Co
 - 🔄 **Multi-Round** — Rounds (fix code) × Exchanges (debate)
 
 <br clear="right">
+
+## 🖥️ Work Interface
+
+<p align="center">
+  <img src="assets/work-interface-1.jpg" alt="MDTalk Work Interface 1" width="48%">
+  <img src="assets/work-interface-2.jpg" alt="MDTalk Work Interface 2" width="48%">
+</p>
+
+<p align="center"><em>Real MDTalk working interface (start screen + runtime dashboard).</em></p>
 
 ## 🔄 How It Works
 
