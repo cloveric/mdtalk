@@ -26,7 +26,7 @@
 </div>
 
 > **MDTalk** is an uncompromising, multi-agent code auditing framework. It replaces passive AI compliance with rigorous adversarial debate, ensuring mission-critical code quality through cross-examination.
-> 
+>
 > *The Chinese name **左右互搏 (Zuo You Hu Bo)** originates from the classic Wuxia novel "The Legend of the Condor Heroes". It describes an advanced martial arts technique where a warrior's left and right hands fight each other independently—perfectly symbolizing our dual-agent adversarial architecture.*
 
 ## The Illusion of "LGTM"
@@ -49,9 +49,13 @@ They engage in an autonomous, rigorous debate. **No human intervention is requir
 ## Features
 
 - **Adversarial Debate Engine:** Two independent AI models (e.g., Claude & Codex) auditing each other to guarantee zero hallucinations.
-- **Autonomous Resolution:** Once consensus is achieved, verified fixes are surgically applied to your source files in real-time.
-- **Universal LLM Integration:** Seamlessly connect with Claude Code, Codex, Gemini, or any standard CLI-based AI agent.
-- **Advanced Contextual Consensus:** Dual-layer consensus engine — keyword matching with negation/boundary detection, falling back to LLM semantic judgment for ambiguous responses. Supports full and partial agreement.
+- **Strict Phase Separation:** Agents are forbidden from modifying code during discussion. Code changes only happen in the dedicated apply phase after consensus.
+- **Autonomous Resolution:** Once consensus is achieved, verified fixes are surgically applied to your source files in real-time. Three apply levels: high-priority only, high+medium, or all.
+- **Universal LLM Integration:** Seamlessly connect with Claude Code, Codex, Gemini CLI, or any standard CLI-based AI agent.
+- **Advanced Consensus Detection:** Keyword matching with negation awareness, word-boundary detection, turning-word rejection (but/however/但是), and partial-qualifier filtering (部分/partially). Supports full and partial agreement.
+- **Interactive Start Screen:** Configure agents, timeouts, rounds, exchanges, apply level, language, and branch mode — all from the TUI before launch.
+- **Git Branch Mode:** Optionally run reviews on an isolated `mdtalk/review-*` branch, with filtered commits and optional merge back.
+- **Bilingual (EN/ZH):** All prompts, TUI labels, and logs fully support English and Chinese.
 - **Premium Terminal UI:** Monitor the entire auditing process through a beautifully crafted, highly responsive Ratatui dashboard.
 
 ## Work Interface
@@ -70,7 +74,7 @@ Experience the auditing process in real-time with our state-of-the-art terminal 
 
 ```bash
 # 1. Install MDTalk
-cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.4 mdtalk
+cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.9 mdtalk
 
 # 2. Enter your target repo and open the start screen (recommended)
 cd /path/to/your/project
@@ -103,9 +107,10 @@ MDTalk uses a **three-rule consensus model** — the judgment logic adapts based
 | Exchange 2+ (not the last) | **Both** A and B must express agreement (full or partial) |
 | Last exchange (`exchange == max_exchanges`) | Agent B alone — full **or** partial agreement |
 
-**Consensus detection is dual-layer:**
+**Consensus detection features:**
 1. **Keyword matching** — checks for `agree / confirmed / 同意 / 成立 / 认可` (and 50+ variants) with negation and word-boundary awareness
-2. **Semantic fallback** — if keywords don't match, an LLM judge reads Agent B's response and returns `AGREE / PARTIAL / DISAGREE`
+2. **Turning-word rejection** — `but / however / although / 但是 / 不过` after an affirmative keyword invalidates full agreement
+3. **Partial-qualifier filtering** — `部分成立` / `partially agree` is recognized as partial, not full agreement
 
 ## Architecture
 
@@ -125,13 +130,13 @@ flowchart LR
 
 ## 简体中文
 
-> **拒绝虚假的“代码不错 (LGTM)”。用交叉验证重塑代码审查。**
+> **拒绝虚假的"代码不错 (LGTM)"。用交叉验证重塑代码审查。**
 >
-> ***“左右互搏”*** *这一命名源自金庸武侠经典《射雕英雄传》，指的是双手互搏、自我对弈的绝顶武艺——这完美契合了本系统双重 AI 智能体相互盘问、交叉验证的架构理念。*
+> ***"左右互搏"*** *这一命名源自金庸武侠经典《射雕英雄传》，指的是双手互搏、自我对弈的绝顶武艺——这完美契合了本系统双重 AI 智能体相互盘问、交叉验证的架构理念。*
 
-### “看似完美”的错觉
-当你向单一的 AI 助手提交数千行的复杂功能进行审查时，它往往会在几秒钟内回复：“逻辑严密，代码优秀 (LGTM)”。
-然而，潜藏在代码深处的并发死锁、参数语义错误和提权漏洞依然存在。单一 AI 模型天生具有“迎合性”和“幻觉”倾向，缺乏严谨的自我验证闭环。
+### "看似完美"的错觉
+当你向单一的 AI 助手提交数千行的复杂功能进行审查时，它往往会在几秒钟内回复："逻辑严密，代码优秀 (LGTM)"。
+然而，潜藏在代码深处的并发死锁、参数语义错误和提权漏洞依然存在。单一 AI 模型天生具有"迎合性"和"幻觉"倾向，缺乏严谨的自我验证闭环。
 
 ### 破局：对抗性多智能体架构
 **左右互搏 (MDTalk)** 彻底颠覆了传统的 AI 审查模式。它引入了双重独立的 AI 智能体，让它们在你的代码库中进行高强度的交叉盘问：
@@ -144,8 +149,13 @@ flowchart LR
 
 ### 核心优势
 - **对抗性验证引擎**：双模型互为攻守，从根本上消除 AI 幻觉，确保审查结果的绝对可靠。支持全部同意与部分同意两种共识结果，精准应用已达成一致的修改。
-- **零妥协自动修复**：一旦达成技术共识，系统将以“手术刀级别”的精度自动修改源码，无需人工复制粘贴。
+- **严格阶段隔离**：讨论阶段严禁修改代码，代码修改仅在达成共识后的专门 apply 阶段执行。
+- **零妥协自动修复**：一旦达成技术共识，系统将以"手术刀级别"的精度自动修改源码。三档修复级别：仅高优先级、高+中优先级、全部修复。
 - **无缝接入任意大模型**：完美适配 Claude Code, Codex, Gemini CLI 或任何基于命令行的 AI 工具。
+- **精准共识检测**：关键词匹配 + 否定词识别 + 词边界检查 + 转折词拦截（but/however/但是）+ 部分限定词过滤（部分/partially）。
+- **交互式启动屏**：在 TUI 中配置 Agent、超时、轮次、讨论次数、修复级别、语言、分支模式，一屏搞定。
+- **Git 分支模式**：可选在独立的 `mdtalk/review-*` 分支上运行审查，过滤提交，可选合并回主分支。
+- **双语支持（中/英）**：所有提示词、界面标签、日志均支持中英文切换。
 - **极客级终端大屏 (TUI)**：基于 Ratatui 构建的实时终端可视化面板，以极其优雅的方式呈现 AI 间的思维碰撞。
 
 ### 共识判断机制
@@ -159,16 +169,17 @@ MDTalk 使用**三规则共识模型**，根据当前讨论的位置动态调整
 | 第 2 次及以上（非最后一次） | A 和 B 都需要表达认可（全/部分均可） |
 | 最后一次讨论（用尽次数） | 只看 B，全部同意或部分同意都算 |
 
-**共识检测双重保障：**
+**共识检测能力：**
 1. **关键词匹配** — 检测 `agree / confirmed / 同意 / 成立 / 认可` 等 50+ 种表达，带否定词和词边界识别
-2. **语义兜底** — 关键词未命中时，调用 LLM 裁判语义判断，返回 `AGREE / PARTIAL / DISAGREE`
+2. **转折词拦截** — `but / however / although / 但是 / 不过` 出现在肯定关键词之后，则不算完全同意
+3. **部分限定词过滤** — `部分成立` / `partially agree` 被识别为部分同意，不算完全同意
 
 ### 快速接入
 **环境要求：** [Rust](https://rustup.rs/) 1.75+ 以及至少一个可用的 AI 命令行工具（如 [Claude Code](https://claude.ai/download)）。
 
 ```bash
 # 1. 安装 MDTalk
-cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.4 mdtalk
+cargo install --git https://github.com/cloveric/mdtalk --tag v0.1.9 mdtalk
 
 # 2. 进入待审查项目并打开启动页（推荐）
 cd /path/to/your/project
