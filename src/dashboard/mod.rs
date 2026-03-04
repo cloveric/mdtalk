@@ -163,6 +163,7 @@ pub fn render_demo() -> Result<()> {
         max_rounds: 2,
         current_exchange: 2,
         max_exchanges: 5,
+        no_apply: false,
         agent_a_name: "claude".to_string(),
         agent_a_timeout_secs: 900,
         agent_b_name: "codex".to_string(),
@@ -181,7 +182,8 @@ pub fn render_demo() -> Result<()> {
             "[13:38:10] 第2轮: Agent A 完成 (87秒)".to_string(),
             "[13:38:10] 第2轮: Agent B (codex) 开始回应".to_string(),
         ],
-        conversation_preview: "\
+        conversation_preview: std::sync::Arc::<str>::from(
+            "\
 # Code Review: my-project
 ## Review Session - 2026-03-03 13:30:00
 
@@ -221,8 +223,8 @@ wait() 后读取 stdout/stderr 可能因管道缓冲区满而死锁。
 我同意 codex 的所有发现。UTF-8 问题
 确实值得关注。另外补充一点...
 
----"
-        .to_string(),
+---",
+        ),
         finished: false,
         error_message: None,
         review_branch: None,

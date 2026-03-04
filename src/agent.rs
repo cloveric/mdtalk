@@ -31,8 +31,9 @@ pub enum AgentRunMode {
     Apply,
 }
 
-const WINDOWS_PROMPT_SOFT_LIMIT_BYTES: usize = 7600;
 const DEFAULT_PROMPT_SOFT_LIMIT_BYTES: usize = 65_536;
+const WINDOWS_CMD_MAX_CHARS: usize = 8191;
+const WINDOWS_CMD_RESERVED_CHARS: usize = 256;
 
 impl AgentRunner {
     pub fn new(config: &AgentConfig) -> Self {
@@ -75,29 +76,42 @@ impl AgentRunner {
                 args
             }
             "gemini" => {
-                // Gemini CLI currently exposes approval mode as the practical write-enabling
-                // switch, and does not provide a separate apply-only sandbox bypass flag.
-                vec!["--approval-mode=yolo".to_string(), prompt.to_string()]
+                let mut args = Vec::new();
+                if mode == AgentRunMode::Apply {
+                    args.push("--approval-mode=yolo".to_string());
+                }
+                args.push(prompt.to_string());
+                args
             }
             // Generic fallback: just pass prompt as a single arg
             _ => vec![prompt.to_string()],
         }
     }
 
-    fn validate_prompt_length(&self, prompt: &str) -> Result<()> {
-        let limit = if cfg!(windows) {
-            WINDOWS_PROMPT_SOFT_LIMIT_BYTES
-        } else {
-            DEFAULT_PROMPT_SOFT_LIMIT_BYTES
-        };
+    fn validate_prompt_length(&self, prompt: &str, args: &[String]) -> Result<()> {
+        if cfg!(windows) {
+            let limit = WINDOWS_CMD_MAX_CHARS.saturating_sub(WINDOWS_CMD_RESERVED_CHARS);
+            let estimated = estimate_windows_command_line_length(&self.command_program, args);
+            if estimated > limit {
+                anyhow::bail!(
+                    "Agent '{}' command line too long on Windows (estimated {} chars > {} chars soft limit). \
+                     Keep prompts concise or move long context into files.",
+                    self.name,
+                    estimated,
+                    limit
+                );
+            }
+            return Ok(());
+        }
+
         let prompt_len = prompt.len();
-        if prompt_len > limit {
+        if prompt_len > DEFAULT_PROMPT_SOFT_LIMIT_BYTES {
             anyhow::bail!(
                 "Agent '{}' prompt too long ({} bytes > {} bytes soft limit). \
                  Keep prompts concise or move long context into files.",
                 self.name,
                 prompt_len,
-                limit
+                DEFAULT_PROMPT_SOFT_LIMIT_BYTES
             );
         }
         Ok(())
@@ -110,9 +124,9 @@ impl AgentRunner {
         project_path: &Path,
         mode: AgentRunMode,
     ) -> Result<AgentOutput> {
-        self.validate_prompt_length(prompt)?;
         let mut args = self.command_prefix_args.clone();
         args.extend(self.build_args(prompt, mode));
+        self.validate_prompt_length(prompt, &args)?;
         info!(
             agent = %self.name,
             command = %self.command,
@@ -126,15 +140,7 @@ impl AgentRunner {
     async fn run_with_args(&self, args: Vec<String>, project_path: &Path) -> Result<AgentOutput> {
         let start = Instant::now();
 
-        let (command_program, command_args) = if cfg!(windows) {
-            // On Windows, CLI tools installed via npm are often .cmd scripts that
-            // are more reliable when launched through cmd /C.
-            let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
-            full_args.extend(args);
-            ("cmd".to_string(), full_args)
-        } else {
-            (self.command_program.clone(), args)
-        };
+        let (command_program, command_args) = self.spawn_command_with_platform_prefix(args);
 
         let mut cmd = Command::new(&command_program);
         cmd.kill_on_drop(true)
@@ -236,35 +242,7 @@ impl AgentRunner {
             Err(_) => {
                 // Timeout: kill the entire process tree, then abort read tasks
                 warn!(agent = %self.name, timeout_secs = self.timeout.as_secs(), "Agent timed out, killing process");
-
-                // On Windows, child.kill() only kills cmd.exe, not the actual agent.
-                // Use taskkill /T /F /PID to kill the entire process tree.
-                #[cfg(windows)]
-                {
-                    if let Some(pid) = child.id() {
-                        let _ = Command::new("taskkill")
-                            .args(["/T", "/F", "/PID", &pid.to_string()])
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .await;
-                    }
-                    child.kill().await.ok();
-                }
-
-                #[cfg(unix)]
-                {
-                    if let Some(pid) = child.id() {
-                        // The child is started with process_group(0), so pid == pgid.
-                        let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                    }
-                    child.kill().await.ok();
-                }
-
-                #[cfg(not(any(unix, windows)))]
-                {
-                    child.kill().await.ok();
-                }
+                kill_child_process_tree(&mut child).await;
 
                 // Abort the read tasks since the process is dead
                 stdout_task.abort();
@@ -277,6 +255,72 @@ impl AgentRunner {
                 );
             }
         }
+    }
+
+    fn spawn_command_with_platform_prefix(&self, args: Vec<String>) -> (String, Vec<String>) {
+        if cfg!(windows) {
+            // On Windows, CLI tools installed via npm are often .cmd scripts that
+            // are more reliable when launched through cmd /C.
+            let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
+            full_args.extend(args);
+            ("cmd".to_string(), full_args)
+        } else {
+            (self.command_program.clone(), args)
+        }
+    }
+}
+
+fn estimate_windows_command_line_length(command_program: &str, args: &[String]) -> usize {
+    let mut estimated = "cmd /C ".len() + command_program.len();
+    for arg in args {
+        estimated += 1; // separator
+        estimated += estimate_windows_arg_length(arg);
+    }
+    estimated
+}
+
+fn estimate_windows_arg_length(arg: &str) -> usize {
+    if arg.is_empty() {
+        return 2; // ""
+    }
+    let needs_quotes = arg
+        .bytes()
+        .any(|b| matches!(b, b' ' | b'\t' | b'"' | b'&' | b'|' | b'<' | b'>'));
+    if !needs_quotes {
+        return arg.len();
+    }
+    let quote_count = arg.bytes().filter(|b| *b == b'"').count();
+    arg.len() + 2 + quote_count
+}
+
+async fn kill_child_process_tree(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    {
+        // On Windows, child.kill() only kills cmd.exe, not the actual agent.
+        // Use taskkill /T /F /PID to kill the entire process tree.
+        if let Some(pid) = child.id() {
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+        }
+        child.kill().await.ok();
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // The child is started with process_group(0), so pid == pgid.
+            let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
+        }
+        child.kill().await.ok();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        child.kill().await.ok();
     }
 }
 
@@ -312,7 +356,9 @@ fn split_command_line(command: &str) -> Vec<String> {
 mod tests {
     use crate::config::AgentConfig;
 
-    use super::{AgentRunMode, AgentRunner, DEFAULT_PROMPT_SOFT_LIMIT_BYTES};
+    #[cfg(not(windows))]
+    use super::DEFAULT_PROMPT_SOFT_LIMIT_BYTES;
+    use super::{AgentRunMode, AgentRunner};
 
     fn runner(command: &str) -> AgentRunner {
         let cfg = AgentConfig {
@@ -366,6 +412,12 @@ mod tests {
     }
 
     #[test]
+    fn gemini_discussion_mode_avoids_yolo_mode() {
+        let args = runner("gemini").build_args("hello", AgentRunMode::Discussion);
+        assert!(args.iter().all(|arg| arg != "--approval-mode=yolo"));
+    }
+
+    #[test]
     fn codex_with_extra_cli_args_still_uses_exec_mode() {
         let args = runner("codex --model gpt-5").build_args("hello", AgentRunMode::Apply);
         assert!(args.iter().any(|arg| arg == "exec"));
@@ -385,13 +437,25 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn prompt_soft_limit_is_enforced() {
         let runner = runner("codex");
         let prompt = "x".repeat(DEFAULT_PROMPT_SOFT_LIMIT_BYTES + 1);
         let err = runner
-            .validate_prompt_length(&prompt)
+            .validate_prompt_length(&prompt, &[prompt.clone()])
             .expect_err("prompt longer than soft limit should be rejected");
         assert!(err.to_string().contains("prompt too long"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_line_soft_limit_is_enforced() {
+        let runner = runner("codex");
+        let prompt = "x".repeat(10_000);
+        let err = runner
+            .validate_prompt_length(&prompt, &[prompt.clone()])
+            .expect_err("overlong command line should be rejected on windows");
+        assert!(err.to_string().contains("command line too long"));
     }
 }

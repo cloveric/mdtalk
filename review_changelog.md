@@ -280,3 +280,18 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 21:50:44
+
+已根据 `conversation.md` 的共识项完成修复，覆盖 15/15 条问题，并已直接改代码。
+
+- 核心编排与状态问题已修复：`git status` 解析更稳健且拒绝非 UTF-8 路径、`i18n!` 统一返回 `String`、`conversation_preview` 改为 `Arc<str>` 降低高频 `clone` 成本、启动页 `Skip Apply`（`no_apply`）已贯通到运行时。参考 [src/orchestrator.rs:53](C:/Users/hangw/mdtalk/src/orchestrator.rs:53) [src/orchestrator.rs:100](C:/Users/hangw/mdtalk/src/orchestrator.rs:100) [src/orchestrator.rs:515](C:/Users/hangw/mdtalk/src/orchestrator.rs:515) [src/orchestrator.rs:630](C:/Users/hangw/mdtalk/src/orchestrator.rs:630) [src/orchestrator.rs:1205](C:/Users/hangw/mdtalk/src/orchestrator.rs:1205)。
+- 会话与共识检测问题已修复：尾读 UTF-8 边界处理、changelog header TOCTOU（`create_new`）、转折词扫描不再受 1200 字节窗口限制、结论 fallback 扩展为“末尾非空段落最多 12 行”。参考 [src/conversation.rs:14](C:/Users/hangw/mdtalk/src/conversation.rs:14) [src/conversation.rs:155](C:/Users/hangw/mdtalk/src/conversation.rs:155) [src/consensus.rs:115](C:/Users/hangw/mdtalk/src/consensus.rs:115) [src/consensus.rs:209](C:/Users/hangw/mdtalk/src/consensus.rs:209)。
+- Agent 与 Dashboard 结构性问题已修复：Gemini 仅在 Apply 阶段使用 `--approval-mode=yolo`、Windows 命令长度改为动态估算、平台分支重复逻辑提取、`DashboardApp` 启动态拆分为 `StartScreenState`、布局切分逻辑复用、缩进标题识别支持。参考 [src/agent.rs:56](C:/Users/hangw/mdtalk/src/agent.rs:56) [src/agent.rs:91](C:/Users/hangw/mdtalk/src/agent.rs:91) [src/agent.rs:296](C:/Users/hangw/mdtalk/src/agent.rs:296) [src/dashboard/app.rs:13](C:/Users/hangw/mdtalk/src/dashboard/app.rs:13) [src/dashboard/ui.rs:61](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:61) [src/dashboard/ui.rs:20](C:/Users/hangw/mdtalk/src/dashboard/ui.rs:20) [src/config.rs:164](C:/Users/hangw/mdtalk/src/config.rs:164) [src/main.rs:149](C:/Users/hangw/mdtalk/src/main.rs:149)。
+
+验证已执行：
+- `cargo fmt`
+- `cargo test`（`81 passed, 0 failed`）
+
+
+---
+

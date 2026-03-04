@@ -119,7 +119,9 @@ async fn main() -> Result<()> {
             .with_env_filter("mdtalk=info")
             .init();
 
-        let (state_tx, _state_rx) = watch::channel(orchestrator::OrchestratorState::new(&cfg));
+        let mut initial_state = orchestrator::OrchestratorState::new(&cfg);
+        initial_state.no_apply = cli.no_apply;
+        let (state_tx, _state_rx) = watch::channel(initial_state);
         info!("MDTalk 审查启动 (无仪表盘模式)");
         orchestrator::run(cfg, state_tx, cli.no_apply, cli.apply_level, None, None).await?;
     } else {
@@ -144,23 +146,25 @@ async fn main() -> Result<()> {
             }
         }
 
-        let no_apply = cli.no_apply;
+        let mut no_apply = cli.no_apply;
         let refresh_rate_ms = cfg.dashboard.refresh_rate_ms;
 
         loop {
             let cfg_clone = cfg.clone();
-            let (state_tx, state_rx) =
-                watch::channel(orchestrator::OrchestratorState::new(&cfg_clone));
+            let mut initial_state = orchestrator::OrchestratorState::new(&cfg_clone);
+            initial_state.no_apply = no_apply;
+            let (state_tx, state_rx) = watch::channel(initial_state);
             let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
             let (cmd_tx, cmd_rx) = mpsc::channel::<orchestrator::OrchestratorCommand>(1);
             let cmd_tx_shutdown = cmd_tx.clone();
 
             let apply_level = cli.apply_level;
+            let run_no_apply = no_apply;
             let mut orchestrator_handle = tokio::spawn(async move {
                 orchestrator::run(
                     cfg_clone,
                     state_tx,
-                    no_apply,
+                    run_no_apply,
                     apply_level,
                     Some(start_rx),
                     Some(cmd_rx),
@@ -233,6 +237,7 @@ async fn main() -> Result<()> {
             cfg.agent_b.timeout_secs = final_state.agent_b_timeout_secs;
             cfg.review.max_rounds = final_state.max_rounds;
             cfg.review.max_exchanges = final_state.max_exchanges;
+            no_apply = final_state.no_apply;
 
             match exit {
                 dashboard::DashboardExit::Restart => continue,

@@ -11,6 +11,18 @@ pub struct Conversation {
     project_name: String,
 }
 
+fn trim_invalid_utf8_prefix(bytes: &[u8]) -> &[u8] {
+    // UTF-8 code points are at most 4 bytes. When we tail-read from the file
+    // by fixed-size chunks, the first bytes may start in the middle of a code point.
+    let max_skip = bytes.len().min(3);
+    for skip in 0..=max_skip {
+        if std::str::from_utf8(&bytes[skip..]).is_ok() {
+            return &bytes[skip..];
+        }
+    }
+    bytes
+}
+
 impl Conversation {
     pub fn new(output_dir: &Path, filename: &str, project_name: &str) -> Self {
         Self {
@@ -127,7 +139,7 @@ impl Conversation {
             bytes.extend_from_slice(&chunk);
         }
 
-        let text = String::from_utf8_lossy(&bytes);
+        let text = String::from_utf8_lossy(trim_invalid_utf8_prefix(&bytes));
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.len().saturating_sub(max_lines);
         let mut output = lines[start..].join("\n");
@@ -147,20 +159,29 @@ pub fn append_changelog_with_language(
     en: bool,
 ) -> Result<()> {
     let path = project_dir.join("review_changelog.md");
-    let is_new_file = !path.exists();
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut new_file) => {
+            if en {
+                write!(new_file, "# MDTalk Code Change Log\n\n")?;
+            } else {
+                write!(new_file, "# MDTalk 代码修改记录\n\n")?;
+            }
+            new_file
+                .flush()
+                .with_context(|| format!("Failed to flush changelog header {:?}", path))?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("Failed to create changelog header file {:?}", path));
+        }
+    }
+
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .with_context(|| format!("Failed to open changelog {:?}", path))?;
-
-    if is_new_file {
-        if en {
-            write!(file, "# MDTalk Code Change Log\n\n")?;
-        } else {
-            write!(file, "# MDTalk 代码修改记录\n\n")?;
-        }
-    }
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S");
     if en {
@@ -180,7 +201,7 @@ pub fn append_changelog_with_language(
 
 #[cfg(test)]
 mod tests {
-    use super::{Conversation, append_changelog_with_language};
+    use super::{Conversation, append_changelog_with_language, trim_invalid_utf8_prefix};
     use crate::test_utils::TestTempDir;
 
     #[test]
@@ -235,5 +256,13 @@ mod tests {
         assert_eq!(content.matches("# MDTalk Code Change Log").count(), 1);
         assert!(content.contains("## Round 1 Code Changes"));
         assert!(content.contains("## Round 2 Code Changes"));
+    }
+
+    #[test]
+    fn trim_invalid_utf8_prefix_recovers_from_partial_multibyte_character() {
+        let bytes = vec![0x80u8, 0xE4, 0xBD, 0xA0, b'\n'];
+        let trimmed = trim_invalid_utf8_prefix(&bytes);
+        let text = std::str::from_utf8(trimmed).expect("trimmed bytes should be valid UTF-8");
+        assert_eq!(text, "你\n");
     }
 }

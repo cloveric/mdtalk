@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -71,13 +72,13 @@ async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
         .filter(|entry| !entry.is_empty());
 
     while let Some(entry) = entries.next() {
-        if entry.len() < 4 {
+        if entry.len() < 3 || entry[2] != b' ' {
             continue;
         }
 
         let status_x = entry[0] as char;
         let status_y = entry[1] as char;
-        let path = String::from_utf8_lossy(&entry[3..]).to_string();
+        let path = decode_git_status_path(&entry[3..])?;
         if !path.is_empty() {
             paths.insert(path);
         }
@@ -86,7 +87,7 @@ async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
         if (matches!(status_x, 'R' | 'C') || matches!(status_y, 'R' | 'C'))
             && let Some(next_path) = entries.next()
         {
-            let next = String::from_utf8_lossy(next_path).to_string();
+            let next = decode_git_status_path(next_path)?;
             if !next.is_empty() {
                 paths.insert(next);
             }
@@ -94,6 +95,16 @@ async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
     }
 
     Ok(paths)
+}
+
+fn decode_git_status_path(path_bytes: &[u8]) -> Result<String> {
+    let path = std::str::from_utf8(path_bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "git status --porcelain -z returned a non-UTF-8 path, \
+             which is unsupported in filtered-commit mode"
+        )
+    })?;
+    Ok(path.to_string())
 }
 
 /// Stage the provided paths.
@@ -501,6 +512,7 @@ pub struct OrchestratorState {
     pub max_rounds: u32,
     pub current_exchange: u32,
     pub max_exchanges: u32,
+    pub no_apply: bool,
     pub agent_a_name: String,
     pub agent_a_timeout_secs: u64,
     pub agent_b_name: String,
@@ -508,7 +520,7 @@ pub struct OrchestratorState {
     pub round_durations: Vec<std::time::Duration>,
     pub session_start: Option<Instant>,
     pub logs: Vec<String>,
-    pub conversation_preview: String,
+    pub conversation_preview: Arc<str>,
     pub finished: bool,
     pub error_message: Option<String>,
     pub language: String,
@@ -616,9 +628,14 @@ fn finalize_session_error_state(
 }
 
 macro_rules! i18n {
-    ($state:expr, $en:expr, $zh:expr) => {
-        if $state.is_en() { $en } else { $zh }
-    };
+    ($state:expr, $en:expr, $zh:expr) => {{
+        let msg: String = if $state.is_en() {
+            ($en).into()
+        } else {
+            ($zh).into()
+        };
+        msg
+    }};
 }
 
 enum ExchangeOutcome {
@@ -919,7 +936,7 @@ async fn run_apply_phase(
         };
 
         if shutdown_requested {
-            state.log(i18n!(
+            state.log(&i18n!(
                 state,
                 "Shutdown received, ending session",
                 "收到停止信号，提前结束本次会话"
@@ -1011,7 +1028,7 @@ async fn run_apply_phase(
         );
     }
 
-    state.log(i18n!(
+    state.log(&i18n!(
         state,
         "review_changelog.md updated",
         "review_changelog.md 已更新"
@@ -1079,7 +1096,7 @@ async fn run_branch_finalization(
             ));
 
             state.phase = Phase::WaitingForMerge;
-            state.log(i18n!(
+            state.log(&i18n!(
                 state,
                 "Press Enter to merge, or q to keep branch and exit",
                 "按 Enter 合并分支，或按 q 保留分支并退出"
@@ -1103,7 +1120,7 @@ async fn run_branch_finalization(
             }
 
             if do_merge {
-                state.log(i18n!(state, "Merging...", "正在合并..."));
+                state.log(&i18n!(state, "Merging...", "正在合并..."));
                 let _ = state_tx.send(state.clone());
                 match git_checkout_and_merge(project_path, ob, rb).await {
                     Ok(()) => {
@@ -1126,7 +1143,7 @@ async fn run_branch_finalization(
             }
         }
         GitCommitOutcome::NothingToCommit => {
-            state.log(i18n!(
+            state.log(&i18n!(
                 state,
                 "No file changes to commit on review branch",
                 "审查分支无可提交的文件变更"
@@ -1145,6 +1162,7 @@ impl OrchestratorState {
             max_rounds: config.review.max_rounds,
             current_exchange: 0,
             max_exchanges: config.review.max_exchanges,
+            no_apply: false,
             agent_a_name: config.agent_a.name.clone(),
             agent_a_timeout_secs: config.agent_a.timeout_secs,
             agent_b_name: config.agent_b.name.clone(),
@@ -1152,7 +1170,7 @@ impl OrchestratorState {
             round_durations: Vec::new(),
             session_start: None,
             logs: Vec::new(),
-            conversation_preview: String::new(),
+            conversation_preview: Arc::<str>::from(""),
             finished: false,
             error_message: None,
             language: "zh".to_string(),
@@ -1176,7 +1194,7 @@ impl OrchestratorState {
 
     fn update_preview(&mut self, conversation: &Conversation) {
         if let Ok(tail) = conversation.read_tail_lines(PREVIEW_TAIL_LINES) {
-            self.conversation_preview = tail;
+            self.conversation_preview = Arc::<str>::from(tail);
         }
     }
 }
@@ -1184,7 +1202,7 @@ impl OrchestratorState {
 pub async fn run(
     mut config: MdtalkConfig,
     state_tx: watch::Sender<OrchestratorState>,
-    no_apply: bool,
+    cli_no_apply: bool,
     cli_apply_level: u32,
     start_rx: Option<tokio::sync::oneshot::Receiver<crate::config::StartConfig>>,
     cmd_rx: Option<mpsc::Receiver<OrchestratorCommand>>,
@@ -1194,6 +1212,7 @@ pub async fn run(
     info!("编排器已启动");
 
     // Whether the user wants manual apply confirmation
+    let mut no_apply = cli_no_apply;
     let mut auto_apply = true;
     let mut apply_level: u32 = cli_apply_level;
     let mut branch_mode = false;
@@ -1207,6 +1226,7 @@ pub async fn run(
         match rx.await {
             Ok(sc) => {
                 info!("收到开始信号");
+                no_apply = no_apply || sc.no_apply;
                 auto_apply = sc.auto_apply;
                 apply_level = sc.apply_level;
                 branch_mode = sc.branch_mode;
@@ -1215,6 +1235,7 @@ pub async fn run(
                 // Re-initialize state from updated config
                 state = OrchestratorState::new(&config);
                 state.language = lang;
+                state.no_apply = no_apply;
                 let _ = state_tx.send(state.clone());
             }
             Err(_) => {
@@ -1225,6 +1246,7 @@ pub async fn run(
     }
 
     state.session_start = Some(Instant::now());
+    state.no_apply = no_apply;
     state.log(if state.is_en() {
         "MDTalk session started"
     } else {
@@ -1470,7 +1492,7 @@ mod tests {
 
     use super::{
         ExchangeKind, OrchestratorState, Phase, build_agent_a_prompt, build_agent_b_prompt,
-        build_apply_prompt, classify_exchange, git_commit_filtered, run,
+        build_apply_prompt, classify_exchange, decode_git_status_path, git_commit_filtered, run,
         should_append_round_header,
     };
     use crate::config::{
@@ -1544,7 +1566,12 @@ mod tests {
         }
     }
 
-    fn start_config(agent_a_cmd: String, agent_b_cmd: String, branch_mode: bool) -> StartConfig {
+    fn start_config(
+        agent_a_cmd: String,
+        agent_b_cmd: String,
+        branch_mode: bool,
+        no_apply: bool,
+    ) -> StartConfig {
         StartConfig {
             agent_a_command: agent_a_cmd,
             agent_b_command: agent_b_cmd,
@@ -1552,6 +1579,7 @@ mod tests {
             agent_b_timeout_secs: 10,
             max_rounds: 1,
             max_exchanges: 1,
+            no_apply,
             auto_apply: true,
             apply_level: 1,
             language: "zh".to_string(),
@@ -1592,13 +1620,13 @@ mod tests {
         }
     }
 
-    fn script_fail_on_second_invocation(dir: &Path, name: &str) -> String {
+    fn script_fail_on_apply_prompt(dir: &Path, name: &str) -> String {
         #[cfg(windows)]
         {
             write_script(
                 dir,
                 name,
-                "set MARKER_FILE=%~dp0agent_b_called_once.flag\r\nif exist \"%MARKER_FILE%\" (\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\necho called>\"%MARKER_FILE%\"\r\necho I agree\r\nexit /b 0",
+                "set \"PROMPT=%~1\"\r\necho %PROMPT% | findstr /C:\"根据讨论中达成一致的改进意见\" /C:\"Consensus has been reached.\" >nul\r\nif %errorlevel%==0 (\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\necho I agree\r\nexit /b 0",
             )
         }
         #[cfg(unix)]
@@ -1606,7 +1634,7 @@ mod tests {
             write_script(
                 dir,
                 name,
-                "MARKER_FILE=\"$(dirname \"$0\")/agent_b_called_once.flag\"\nif [ -f \"$MARKER_FILE\" ]; then\n  echo \"apply failed\" >&2\n  exit 1\nfi\necho called > \"$MARKER_FILE\"\necho \"I agree\"\nexit 0",
+                "if printf '%s\\n' \"$1\" | grep -Fq \"根据讨论中达成一致的改进意见\" || printf '%s\\n' \"$1\" | grep -Fq \"Consensus has been reached.\"; then\n  echo \"apply failed\" >&2\n  exit 1\nfi\necho \"I agree\"\nexit 0",
             )
         }
     }
@@ -1701,12 +1729,41 @@ mod tests {
         let temp_dir = TestTempDir::new("orchestrator", "apply-fails");
         let project_dir = temp_dir.path().to_path_buf();
         let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
-        let b_cmd = script_fail_on_second_invocation(&project_dir, "agent_b_fail_on_second_call");
+        let b_cmd = script_fail_on_apply_prompt(&project_dir, "agent_b_fail_on_second_call");
         let cfg = test_config(project_dir.clone(), a_ok_cmd, b_cmd);
         let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let mut sc = start_config(
+            cfg.agent_a.command.clone(),
+            cfg.agent_b.command.clone(),
+            false,
+            false,
+        );
+        sc.language = "en".to_string();
+        start_tx.send(sc).expect("failed to send start config");
 
-        let result = run(cfg, state_tx, false, 1, None, None).await;
+        let result = run(cfg, state_tx, false, 1, Some(start_rx), None).await;
         assert!(result.is_err(), "Apply-phase failure should return Err");
+    }
+
+    #[tokio::test]
+    async fn start_config_no_apply_skips_apply_phase() {
+        let temp_dir = TestTempDir::new("orchestrator", "start-config-no-apply");
+        let project_dir = temp_dir.path().to_path_buf();
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_cmd = script_fail_on_apply_prompt(&project_dir, "agent_b_fail_on_apply_prompt");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_cmd.clone());
+        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        start_tx
+            .send(start_config(a_ok_cmd, b_cmd, false, true))
+            .expect("failed to send start config");
+
+        let result = run(cfg, state_tx, false, 1, Some(start_rx), None).await;
+        assert!(
+            result.is_ok(),
+            "start-screen no_apply should skip apply even when CLI no_apply=false, got: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -1719,7 +1776,7 @@ mod tests {
         let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         start_tx
-            .send(start_config(a_ok_cmd, b_ok_cmd, true))
+            .send(start_config(a_ok_cmd, b_ok_cmd, true, false))
             .expect("failed to send start config");
 
         let result = run(cfg, state_tx, false, 1, Some(start_rx), None).await;
@@ -1759,7 +1816,7 @@ mod tests {
         let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         start_tx
-            .send(start_config(a_ok_cmd, b_ok_cmd, true))
+            .send(start_config(a_ok_cmd, b_ok_cmd, true, false))
             .expect("failed to send start config");
 
         let result = run(cfg, state_tx, true, 1, Some(start_rx), None).await;
@@ -1814,7 +1871,7 @@ mod tests {
         let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         start_tx
-            .send(start_config(a_cmd, b_cmd, true))
+            .send(start_config(a_cmd, b_cmd, true, false))
             .expect("failed to send start config");
 
         let result = run(cfg, state_tx, true, 1, Some(start_rx), None).await;
@@ -1944,5 +2001,18 @@ mod tests {
                 .is_some_and(|line| line.contains("log line 399")),
             "latest logs should be kept"
         );
+    }
+
+    #[test]
+    fn decode_git_status_path_accepts_single_character_path() {
+        let decoded = decode_git_status_path(b"a").expect("single-char path should decode");
+        assert_eq!(decoded, "a");
+    }
+
+    #[test]
+    fn decode_git_status_path_rejects_non_utf8_bytes() {
+        let err = decode_git_status_path(&[0x66, 0x6f, 0x80])
+            .expect_err("non-UTF-8 path bytes must be rejected");
+        assert!(err.to_string().contains("non-UTF-8"));
     }
 }

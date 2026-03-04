@@ -168,6 +168,7 @@ pub struct StartConfig {
     pub agent_b_timeout_secs: u64,
     pub max_rounds: u32,
     pub max_exchanges: u32,
+    pub no_apply: bool,
     pub auto_apply: bool,
     pub apply_level: u32,
     pub language: String,

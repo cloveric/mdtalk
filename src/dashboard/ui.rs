@@ -25,11 +25,11 @@ fn classify_markdown_line(line: &str, in_code_block: bool) -> (MarkdownLineKind,
         return (MarkdownLineKind::Normal, true);
     }
 
-    if line.starts_with("#### ") {
+    if trimmed.starts_with("#### ") {
         (MarkdownLineKind::HeadingLevel4, false)
-    } else if line.starts_with("### ") {
+    } else if trimmed.starts_with("### ") {
         (MarkdownLineKind::HeadingLevel3, false)
-    } else if line.starts_with("## ") || line.starts_with("# ") {
+    } else if trimmed.starts_with("## ") || trimmed.starts_with("# ") {
         (MarkdownLineKind::HeadingLevel1Or2, false)
     } else {
         (MarkdownLineKind::Normal, false)
@@ -58,19 +58,29 @@ fn style_conversation_line(line: &str, kind: MarkdownLineKind) -> Line<'static> 
     }
 }
 
-pub fn conversation_visible_lines_for_area(area: Rect) -> u16 {
-    let chunks = Layout::default()
+fn split_main_layout(area: Rect) -> Vec<Rect> {
+    Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),               // Status bar
             Constraint::Min(10),                 // Content area
             Constraint::Length(LOG_AREA_HEIGHT), // Log area
         ])
-        .split(area);
-    let content_chunks = Layout::default()
+        .split(area)
+        .to_vec()
+}
+
+fn split_content_layout(area: Rect) -> Vec<Rect> {
+    Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(chunks[1]);
+        .split(area)
+        .to_vec()
+}
+
+pub fn conversation_visible_lines_for_area(area: Rect) -> u16 {
+    let chunks = split_main_layout(area);
+    let content_chunks = split_content_layout(chunks[1]);
     content_chunks[0].height.saturating_sub(2).max(1)
 }
 
@@ -81,14 +91,7 @@ pub fn draw(f: &mut Frame, app: &DashboardApp) {
     }
 
     // Main layout: top status bar, middle content, bottom logs
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),               // Status bar
-            Constraint::Min(10),                 // Content area
-            Constraint::Length(LOG_AREA_HEIGHT), // Log area
-        ])
-        .split(f.area());
+    let chunks = split_main_layout(f.area());
 
     draw_status_bar(f, app, chunks[0]);
     draw_content(f, app, chunks[1]);
@@ -117,7 +120,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Interactive config form — 10 fields
+    // Interactive config form — 11 fields
     let labels = [
         "  Agent A:     ",
         "  A Timeout:   ",
@@ -125,34 +128,40 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         "  B Timeout:   ",
         "  Rounds:      ",
         "  Exchanges:   ",
+        "  Skip Apply:  ",
         "  Auto Apply:  ",
         "  Apply Level: ",
         "  Language:    ",
         "  Branch Mode: ",
     ];
-    let values: [String; 10] = [
-        app.agent_presets[app.agent_a_idx].clone(),
-        format!("{}s", app.edit_agent_a_timeout_secs),
-        app.agent_presets[app.agent_b_idx].clone(),
-        format!("{}s", app.edit_agent_b_timeout_secs),
-        format!("{}", app.edit_rounds),
-        format!("{}", app.edit_exchanges),
-        if app.auto_apply {
+    let values: [String; 11] = [
+        app.start.agent_presets[app.start.agent_a_idx].clone(),
+        format!("{}s", app.start.agent_a_timeout_secs),
+        app.start.agent_presets[app.start.agent_b_idx].clone(),
+        format!("{}s", app.start.agent_b_timeout_secs),
+        format!("{}", app.start.rounds),
+        format!("{}", app.start.exchanges),
+        if app.start.no_apply {
             "Yes".to_string()
         } else {
             "No".to_string()
         },
-        match app.apply_level {
+        if app.start.auto_apply {
+            "Yes".to_string()
+        } else {
+            "No".to_string()
+        },
+        match app.start.apply_level {
             2 => "High+Med".to_string(),
             3 => "All".to_string(),
             _ => "High".to_string(),
         },
-        if app.language == "en" {
+        if app.start.language == "en" {
             "English".to_string()
         } else {
             "中文".to_string()
         },
-        if app.branch_mode {
+        if app.start.branch_mode {
             "Yes".to_string()
         } else {
             "No".to_string()
@@ -168,6 +177,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         Color::White,
         Color::White,
         Color::White,
+        Color::Red,
         Color::Yellow,
         Color::Green,
         Color::Cyan,
@@ -176,7 +186,7 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
 
     let mut info_lines = vec![Line::from("")];
     for (i, (label, value)) in labels.iter().zip(values.iter()).enumerate() {
-        let is_selected = i == app.selected_field;
+        let is_selected = i == app.start.selected_field;
         let val_color = value_colors[i];
 
         if is_selected {
@@ -419,10 +429,7 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let en = state.language == "en";
 
     // Split content area: left = conversation preview, right = agent status
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(area);
+    let chunks = split_content_layout(area);
 
     // Left: Conversation preview
     let mut in_code_block = false;
@@ -586,6 +593,13 @@ mod tests {
     #[test]
     fn markdown_heading_is_detected_outside_code_block() {
         let (kind, in_code_block) = classify_markdown_line("### Heading", false);
+        assert_eq!(kind, MarkdownLineKind::HeadingLevel3);
+        assert!(!in_code_block);
+    }
+
+    #[test]
+    fn indented_markdown_heading_is_detected() {
+        let (kind, in_code_block) = classify_markdown_line("   ### Heading", false);
         assert_eq!(kind, MarkdownLineKind::HeadingLevel3);
         assert!(!in_code_block);
     }

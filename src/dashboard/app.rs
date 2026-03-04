@@ -7,8 +7,24 @@ use crate::orchestrator::{OrchestratorCommand, OrchestratorState};
 const TIMEOUT_MIN_SECS: u64 = 60;
 const TIMEOUT_MAX_SECS: u64 = 3600;
 const TIMEOUT_STEP_SECS: u64 = 60;
-const START_FIELD_COUNT: usize = 10;
+const START_FIELD_COUNT: usize = 11;
 const START_LAST_FIELD: usize = START_FIELD_COUNT - 1;
+
+pub struct StartScreenState {
+    pub selected_field: usize,
+    pub agent_presets: Vec<String>,
+    pub agent_a_idx: usize,
+    pub agent_b_idx: usize,
+    pub agent_a_timeout_secs: u64,
+    pub agent_b_timeout_secs: u64,
+    pub rounds: u32,
+    pub exchanges: u32,
+    pub no_apply: bool,
+    pub auto_apply: bool,
+    pub apply_level: u32,
+    pub language: String,
+    pub branch_mode: bool,
+}
 
 pub struct DashboardApp {
     pub state: OrchestratorState,
@@ -20,20 +36,7 @@ pub struct DashboardApp {
     pub restart_requested: bool,
     start_tx: Option<oneshot::Sender<StartConfig>>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
-
-    // Interactive start-screen fields
-    pub selected_field: usize,
-    pub agent_presets: Vec<String>,
-    pub agent_a_idx: usize,
-    pub agent_b_idx: usize,
-    pub edit_agent_a_timeout_secs: u64,
-    pub edit_agent_b_timeout_secs: u64,
-    pub edit_rounds: u32,
-    pub edit_exchanges: u32,
-    pub auto_apply: bool,
-    pub apply_level: u32,
-    pub language: String,
-    pub branch_mode: bool,
+    pub start: StartScreenState,
 }
 
 impl DashboardApp {
@@ -53,14 +56,20 @@ impl DashboardApp {
             .position(|p| p == &initial_state.agent_b_name)
             .unwrap_or(1.min(presets.len().saturating_sub(1)));
 
-        let edit_rounds = initial_state.max_rounds;
-        let edit_exchanges = initial_state.max_exchanges;
-        let edit_agent_a_timeout_secs = initial_state
+        let rounds = initial_state.max_rounds;
+        let exchanges = initial_state.max_exchanges;
+        let agent_a_timeout_secs = initial_state
             .agent_a_timeout_secs
             .clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
-        let edit_agent_b_timeout_secs = initial_state
+        let agent_b_timeout_secs = initial_state
             .agent_b_timeout_secs
             .clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
+        let language = if initial_state.language == "en" {
+            "en".to_string()
+        } else {
+            "zh".to_string()
+        };
+        let no_apply = initial_state.no_apply;
 
         Self {
             state: initial_state,
@@ -72,111 +81,118 @@ impl DashboardApp {
             restart_requested: false,
             start_tx: Some(start_tx),
             cmd_tx,
-            selected_field: 0,
-            agent_presets: presets,
-            agent_a_idx,
-            agent_b_idx,
-            edit_agent_a_timeout_secs,
-            edit_agent_b_timeout_secs,
-            edit_rounds,
-            edit_exchanges,
-            auto_apply: true,
-            apply_level: 1,
-            language: "en".to_string(),
-            branch_mode: false,
+            start: StartScreenState {
+                selected_field: 0,
+                agent_presets: presets,
+                agent_a_idx,
+                agent_b_idx,
+                agent_a_timeout_secs,
+                agent_b_timeout_secs,
+                rounds,
+                exchanges,
+                no_apply,
+                auto_apply: true,
+                apply_level: 1,
+                language,
+                branch_mode: false,
+            },
         }
     }
 
     /// Move selection to previous field.
     pub fn select_prev(&mut self) {
-        if self.selected_field > 0 {
-            self.selected_field -= 1;
+        if self.start.selected_field > 0 {
+            self.start.selected_field -= 1;
         } else {
-            self.selected_field = START_LAST_FIELD;
+            self.start.selected_field = START_LAST_FIELD;
         }
     }
 
     /// Move selection to next field.
     pub fn select_next(&mut self) {
-        if self.selected_field < START_LAST_FIELD {
-            self.selected_field += 1;
+        if self.start.selected_field < START_LAST_FIELD {
+            self.start.selected_field += 1;
         } else {
-            self.selected_field = 0;
+            self.start.selected_field = 0;
         }
     }
 
     /// Adjust current field's value to the left (previous preset / decrement).
     pub fn adjust_left(&mut self) {
-        let n = self.agent_presets.len();
-        match self.selected_field {
-            0 => self.agent_a_idx = (self.agent_a_idx + n - 1) % n,
+        let n = self.start.agent_presets.len();
+        match self.start.selected_field {
+            0 => self.start.agent_a_idx = (self.start.agent_a_idx + n - 1) % n,
             1 => {
-                self.edit_agent_a_timeout_secs = self
-                    .edit_agent_a_timeout_secs
+                self.start.agent_a_timeout_secs = self
+                    .start
+                    .agent_a_timeout_secs
                     .saturating_sub(TIMEOUT_STEP_SECS)
                     .max(TIMEOUT_MIN_SECS)
             }
-            2 => self.agent_b_idx = (self.agent_b_idx + n - 1) % n,
+            2 => self.start.agent_b_idx = (self.start.agent_b_idx + n - 1) % n,
             3 => {
-                self.edit_agent_b_timeout_secs = self
-                    .edit_agent_b_timeout_secs
+                self.start.agent_b_timeout_secs = self
+                    .start
+                    .agent_b_timeout_secs
                     .saturating_sub(TIMEOUT_STEP_SECS)
                     .max(TIMEOUT_MIN_SECS)
             }
-            4 => self.edit_rounds = (self.edit_rounds.saturating_sub(1)).max(1),
-            5 => self.edit_exchanges = (self.edit_exchanges.saturating_sub(1)).max(1),
-            6 => self.auto_apply = !self.auto_apply,
-            7 => {
-                self.apply_level = if self.apply_level <= 1 {
+            4 => self.start.rounds = (self.start.rounds.saturating_sub(1)).max(1),
+            5 => self.start.exchanges = (self.start.exchanges.saturating_sub(1)).max(1),
+            6 => self.start.no_apply = !self.start.no_apply,
+            7 => self.start.auto_apply = !self.start.auto_apply,
+            8 => {
+                self.start.apply_level = if self.start.apply_level <= 1 {
                     3
                 } else {
-                    self.apply_level - 1
+                    self.start.apply_level - 1
                 }
             }
-            8 => {
-                self.language = if self.language == "en" {
+            9 => {
+                self.start.language = if self.start.language == "en" {
                     "zh".to_string()
                 } else {
                     "en".to_string()
                 }
             }
-            9 => self.branch_mode = !self.branch_mode,
+            10 => self.start.branch_mode = !self.start.branch_mode,
             _ => {}
         }
     }
 
     /// Adjust current field's value to the right (next preset / increment).
     pub fn adjust_right(&mut self) {
-        let n = self.agent_presets.len();
-        match self.selected_field {
-            0 => self.agent_a_idx = (self.agent_a_idx + 1) % n,
+        let n = self.start.agent_presets.len();
+        match self.start.selected_field {
+            0 => self.start.agent_a_idx = (self.start.agent_a_idx + 1) % n,
             1 => {
-                self.edit_agent_a_timeout_secs =
-                    (self.edit_agent_a_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
+                self.start.agent_a_timeout_secs =
+                    (self.start.agent_a_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
             }
-            2 => self.agent_b_idx = (self.agent_b_idx + 1) % n,
+            2 => self.start.agent_b_idx = (self.start.agent_b_idx + 1) % n,
             3 => {
-                self.edit_agent_b_timeout_secs =
-                    (self.edit_agent_b_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
+                self.start.agent_b_timeout_secs =
+                    (self.start.agent_b_timeout_secs + TIMEOUT_STEP_SECS).min(TIMEOUT_MAX_SECS)
             }
-            4 => self.edit_rounds = (self.edit_rounds + 1).min(10),
-            5 => self.edit_exchanges = (self.edit_exchanges + 1).min(10),
-            6 => self.auto_apply = !self.auto_apply,
-            7 => {
-                self.apply_level = if self.apply_level >= 3 {
+            4 => self.start.rounds = (self.start.rounds + 1).min(10),
+            5 => self.start.exchanges = (self.start.exchanges + 1).min(10),
+            6 => self.start.no_apply = !self.start.no_apply,
+            7 => self.start.auto_apply = !self.start.auto_apply,
+            8 => {
+                self.start.apply_level = if self.start.apply_level >= 3 {
                     1
                 } else {
-                    self.apply_level + 1
+                    self.start.apply_level + 1
                 }
             }
-            8 => {
-                self.language = if self.language == "en" {
+            9 => {
+                self.start.language = if self.start.language == "en" {
                     "zh".to_string()
                 } else {
                     "en".to_string()
                 }
             }
-            9 => self.branch_mode = !self.branch_mode,
+            10 => self.start.branch_mode = !self.start.branch_mode,
             _ => {}
         }
     }
@@ -185,16 +201,17 @@ impl DashboardApp {
     pub fn confirm_start(&mut self) {
         if let Some(tx) = self.start_tx.take() {
             let sc = StartConfig {
-                agent_a_command: self.agent_presets[self.agent_a_idx].clone(),
-                agent_b_command: self.agent_presets[self.agent_b_idx].clone(),
-                agent_a_timeout_secs: self.edit_agent_a_timeout_secs,
-                agent_b_timeout_secs: self.edit_agent_b_timeout_secs,
-                max_rounds: self.edit_rounds,
-                max_exchanges: self.edit_exchanges,
-                auto_apply: self.auto_apply,
-                apply_level: self.apply_level,
-                language: self.language.clone(),
-                branch_mode: self.branch_mode,
+                agent_a_command: self.start.agent_presets[self.start.agent_a_idx].clone(),
+                agent_b_command: self.start.agent_presets[self.start.agent_b_idx].clone(),
+                agent_a_timeout_secs: self.start.agent_a_timeout_secs,
+                agent_b_timeout_secs: self.start.agent_b_timeout_secs,
+                max_rounds: self.start.rounds,
+                max_exchanges: self.start.exchanges,
+                no_apply: self.start.no_apply,
+                auto_apply: self.start.auto_apply,
+                apply_level: self.start.apply_level,
+                language: self.start.language.clone(),
+                branch_mode: self.start.branch_mode,
             };
             let _ = tx.send(sc);
             self.waiting_for_start = false;
@@ -219,7 +236,7 @@ impl DashboardApp {
 
     pub fn update_state(&mut self, new_state: OrchestratorState) {
         self.state = new_state;
-        self.language = self.state.language.clone();
+        self.start.language = self.state.language.clone();
         // Auto-scroll logs to bottom.
         let log_len = self.state.logs.len() as u16;
         if log_len > LOG_VISIBLE_LINES {

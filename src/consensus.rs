@@ -40,8 +40,7 @@ const ENGLISH_TURNING_TOKENS: &[&str] = &[
 ];
 const CHINESE_TURNING_TOKENS: &[&str] = &["但", "但是", "不过", "然而", "可是"];
 const CHINESE_NEGATION_LOOKBACK_CHARS: usize = 16;
-const TURNING_SCAN_MAX_BYTES: usize = 1200;
-const TURNING_SCAN_MAX_SENTENCES: usize = 6;
+const CONCLUSION_FALLBACK_NON_EMPTY_LINES: usize = 12;
 
 fn is_clause_boundary(ch: char) -> bool {
     matches!(
@@ -114,14 +113,12 @@ fn has_chinese_turning_word(text: &str) -> bool {
 }
 
 fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) -> bool {
-    let mut context_end = (keyword_end + TURNING_SCAN_MAX_BYTES).min(text_lower.len());
-    while context_end > keyword_end && !text_lower.is_char_boundary(context_end) {
-        context_end -= 1;
+    let following = text_lower[keyword_end..].trim_start();
+    if following.is_empty() {
+        return false;
     }
-    let following = text_lower[keyword_end..context_end].trim_start();
-    let mut sentence_start = 0usize;
-    let mut inspected_sentences = 0usize;
 
+    let mut sentence_start = 0usize;
     for (idx, ch) in following.char_indices() {
         if !is_sentence_boundary(ch) {
             continue;
@@ -130,19 +127,11 @@ fn has_turning_word_in_following_clause(text_lower: &str, keyword_end: usize) ->
         if has_english_turning_word(sentence) || has_chinese_turning_word(sentence) {
             return true;
         }
-        inspected_sentences += 1;
-        if inspected_sentences >= TURNING_SCAN_MAX_SENTENCES {
-            return false;
-        }
         sentence_start = idx + ch.len_utf8();
     }
 
-    if inspected_sentences < TURNING_SCAN_MAX_SENTENCES {
-        let tail = following[sentence_start..].trim_start();
-        return has_english_turning_word(tail) || has_chinese_turning_word(tail);
-    }
-
-    false
+    let tail = following[sentence_start..].trim_start();
+    has_english_turning_word(tail) || has_chinese_turning_word(tail)
 }
 
 fn has_turning_word_in_preceding_clause(local_preceding: &str) -> bool {
@@ -227,28 +216,44 @@ fn extract_conclusion_section(response: &str) -> &str {
             return &response[line_start..];
         }
     }
-    // No conclusion marker found — use the last 3 non-empty lines as fallback.
-    // Short responses (no newlines) are returned in full.
+    // No conclusion marker found — use the trailing non-empty paragraph,
+    // with a larger line cap for multi-line summaries.
     let mut line_starts: Vec<usize> = vec![0];
-    for (i, ch) in response.char_indices() {
+    for (idx, ch) in response.char_indices() {
         if ch == '\n' {
-            line_starts.push(i + 1);
+            line_starts.push(idx + 1);
         }
     }
-    // Skip trailing empty lines
-    while line_starts.len() > 1 {
-        let last = *line_starts.last().unwrap();
-        if last >= response.len() || response[last..].trim().is_empty() {
-            line_starts.pop();
-        } else {
+
+    let mut started = false;
+    let mut kept = 0usize;
+    let mut start_idx = response.len();
+    for &line_start in line_starts.iter().rev() {
+        let line_end = response[line_start..]
+            .find('\n')
+            .map_or(response.len(), |offset| line_start + offset);
+        let line = &response[line_start..line_end];
+        let is_empty = line.trim().is_empty();
+
+        if !started {
+            if is_empty {
+                continue;
+            }
+            started = true;
+        } else if is_empty {
             break;
         }
+
+        if kept >= CONCLUSION_FALLBACK_NON_EMPTY_LINES {
+            break;
+        }
+        start_idx = line_start;
+        kept += 1;
     }
-    let start_idx = if line_starts.len() > 3 {
-        line_starts[line_starts.len() - 3]
-    } else {
-        0
-    };
+
+    if kept == 0 {
+        return response;
+    }
     &response[start_idx..]
 }
 
@@ -562,6 +567,16 @@ mod tests {
     }
 
     #[test]
+    fn full_only_rejects_turning_word_even_when_it_appears_beyond_1200_bytes() {
+        let kws = vec!["agree".into()];
+        let long_middle = " detail ".repeat(260);
+        let text =
+            format!("I agree with items 1-3.{long_middle} However, item 4 is still incorrect.");
+        let r = check_b_full_only(&text, &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
     fn chinese_negation_with_long_modifier_is_still_negated() {
         let kws = vec!["同意".into()];
         let r = check_consensus(
@@ -672,6 +687,20 @@ mod tests {
     #[test]
     fn extract_conclusion_fallback_uses_tail() {
         let text = "Some review text without a conclusion marker. I agree.";
+        let section = extract_conclusion_section(text);
+        assert!(section.contains("I agree"));
+    }
+
+    #[test]
+    fn extract_conclusion_fallback_keeps_more_than_last_three_lines() {
+        let text = "\
+line 1
+line 2
+line 3
+line 4 I agree with these fixes
+line 5
+line 6
+line 7";
         let section = extract_conclusion_section(text);
         assert!(section.contains("I agree"));
     }
