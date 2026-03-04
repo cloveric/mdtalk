@@ -110,21 +110,15 @@ MDTalk uses a **three-rule consensus model** — the judgment logic adapts based
 ## Architecture
 
 ```mermaid
-flowchart TD
-    Start(["▶ Start"]) --> A
-
-    subgraph ROUND ["🔁 Round Loop (max_rounds)"]
-        subgraph EXCHANGE ["💬 Exchange Loop (max_exchanges)"]
-            A["🔍 Auditor (Agent A)\nReviews code / responds to B"] --> MD["📄 conversation.md"]
-            MD --> B["✅ Verifier (Agent B)\nValidates / cross-examines A"]
-            B --> CK{"Consensus\nCheck"}
-            CK -- "No consensus" --> A
-        end
-        CK -- "Consensus\n(full or partial)" --> FIX["🔧 Apply Fixes"]
-        FIX --> NR{"Next\nRound?"}
-        NR -- "Yes" --> A
-    end
-    NR -- "No" --> Done["🛡️ Codebase Secured"]
+flowchart LR
+    A["🔍 Auditor (A)"] -->|proposes| MD["📄 conversation.md"]
+    MD -->|reads| B["✅ Verifier (B)"]
+    B --> CK{"Consensus?"}
+    CK -->|"No"| A
+    CK -->|"Full / Partial"| FIX["🔧 Apply Fixes"]
+    FIX --> NR{"Next Round?"}
+    NR -->|Yes| A
+    NR -->|No| Done["🛡️ Secured"]
 ```
 
 ---
