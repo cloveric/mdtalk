@@ -188,6 +188,12 @@ impl MdtalkConfig {
 
     /// Validate configuration values.
     fn validate(&self) -> Result<()> {
+        if self.agent_a.timeout_secs == 0 {
+            anyhow::bail!("agent_a.timeout_secs 必须 >= 1，当前值为 0");
+        }
+        if self.agent_b.timeout_secs == 0 {
+            anyhow::bail!("agent_b.timeout_secs 必须 >= 1，当前值为 0");
+        }
         if self.review.max_rounds < 1 {
             anyhow::bail!("max_rounds 必须 >= 1，当前值为 {}", self.review.max_rounds);
         }
@@ -268,5 +274,29 @@ mod tests {
         // Overriding command should not reset timeout from existing config.
         assert_eq!(cfg.agent_a.timeout_secs, 900);
         assert_eq!(cfg.agent_b.timeout_secs, 1200);
+    }
+
+    #[test]
+    fn cli_override_rejects_zero_agent_a_timeout() {
+        let mut cfg = MdtalkConfig::from_cli(PathBuf::from("."), None, None, Some(1), Some(1));
+        cfg.agent_a.timeout_secs = 0;
+
+        let result = cfg.apply_cli_overrides(None, None, None, None, None);
+        assert!(
+            result.is_err(),
+            "validation should reject agent_a timeout of 0 seconds"
+        );
+    }
+
+    #[test]
+    fn cli_override_rejects_zero_agent_b_timeout() {
+        let mut cfg = MdtalkConfig::from_cli(PathBuf::from("."), None, None, Some(1), Some(1));
+        cfg.agent_b.timeout_secs = 0;
+
+        let result = cfg.apply_cli_overrides(None, None, None, None, None);
+        assert!(
+            result.is_err(),
+            "validation should reject agent_b timeout of 0 seconds"
+        );
     }
 }

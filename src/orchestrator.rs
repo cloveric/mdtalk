@@ -96,24 +96,6 @@ async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
     Ok(paths)
 }
 
-/// Reset index to HEAD (keep working tree untouched).
-async fn git_reset_index(project_path: &Path) -> Result<()> {
-    let output = TokioCommand::new("git")
-        .args(["reset", "--quiet"])
-        .current_dir(project_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "git reset --quiet failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
 /// Stage the provided paths.
 async fn git_add_paths(project_path: &Path, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
@@ -135,6 +117,55 @@ async fn git_add_paths(project_path: &Path, paths: &[String]) -> Result<()> {
             "git add (selected paths) failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
+    }
+    Ok(())
+}
+
+/// Check whether staged changes exist for the provided paths.
+async fn git_has_staged_changes_for_paths(project_path: &Path, paths: &[String]) -> Result<bool> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+
+    let mut cmd = TokioCommand::new("git");
+    cmd.args(["diff", "--cached", "--quiet", "--"]);
+    cmd.args(paths);
+    let output = cmd
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => anyhow::bail!(
+            "git diff --cached --quiet -- <paths> failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+/// Commit only the provided paths without touching unrelated staged entries.
+async fn git_commit_only_paths(project_path: &Path, message: &str, paths: &[String]) -> Result<()> {
+    let mut cmd = TokioCommand::new("git");
+    cmd.args(["commit", "-m", message, "--only", "--"]);
+    cmd.args(paths);
+    let commit_output = cmd
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_string();
+        let details = if stderr.is_empty() { stdout } else { stderr };
+        anyhow::bail!("git commit -m failed: {details}");
     }
     Ok(())
 }
@@ -161,44 +192,13 @@ async fn git_commit_filtered(
         return Ok(GitCommitOutcome::NothingToCommit);
     }
 
-    git_reset_index(project_path).await?;
     git_add_paths(project_path, &paths_to_stage).await?;
 
-    let staged_diff = TokioCommand::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(project_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await?;
-    match staged_diff.status.code() {
-        Some(0) => return Ok(GitCommitOutcome::NothingToCommit),
-        Some(1) => {}
-        _ => {
-            anyhow::bail!(
-                "git diff --cached --quiet failed: {}",
-                String::from_utf8_lossy(&staged_diff.stderr).trim()
-            );
-        }
+    if !git_has_staged_changes_for_paths(project_path, &paths_to_stage).await? {
+        return Ok(GitCommitOutcome::NothingToCommit);
     }
 
-    let commit_output = TokioCommand::new("git")
-        .args(["commit", "-m", message])
-        .current_dir(project_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await?;
-    if !commit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_output.stderr)
-            .trim()
-            .to_string();
-        let stdout = String::from_utf8_lossy(&commit_output.stdout)
-            .trim()
-            .to_string();
-        let details = if stderr.is_empty() { stdout } else { stderr };
-        anyhow::bail!("git commit -m failed: {details}");
-    }
+    git_commit_only_paths(project_path, message, &paths_to_stage).await?;
 
     Ok(GitCommitOutcome::Committed)
 }
@@ -382,6 +382,28 @@ fn consume_shutdown_command(
     false
 }
 
+fn expose_branch_info(
+    state: &mut OrchestratorState,
+    review_branch: &Option<String>,
+    original_branch: &Option<String>,
+) {
+    if let (Some(rb), Some(ob)) = (review_branch, original_branch) {
+        state.review_branch = Some(rb.clone());
+        state.original_branch = Some(ob.clone());
+    }
+}
+
+fn finalize_session_state(
+    state: &mut OrchestratorState,
+    conversation: &Conversation,
+    state_tx: &watch::Sender<OrchestratorState>,
+) {
+    state.phase = Phase::Done;
+    state.finished = true;
+    state.update_preview(conversation);
+    let _ = state_tx.send(state.clone());
+}
+
 impl OrchestratorState {
     pub fn new(config: &MdtalkConfig) -> Self {
         Self {
@@ -535,6 +557,8 @@ pub async fn run(
         let _ = state_tx.send(state.clone());
 
         if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+            expose_branch_info(&mut state, &review_branch, &original_branch);
+            finalize_session_state(&mut state, &conversation, &state_tx);
             return Ok(());
         }
 
@@ -553,6 +577,8 @@ pub async fn run(
             let exchange_kind = classify_exchange(round, exchange);
 
             if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+                expose_branch_info(&mut state, &review_branch, &original_branch);
+                finalize_session_state(&mut state, &conversation, &state_tx);
                 return Ok(());
             }
 
@@ -757,10 +783,8 @@ pub async fn run(
         state.round_durations.push(round_start.elapsed());
 
         if let Some(err) = execution_error {
-            state.phase = Phase::Done;
-            state.finished = true;
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
+            expose_branch_info(&mut state, &review_branch, &original_branch);
+            finalize_session_state(&mut state, &conversation, &state_tx);
             return Err(err);
         }
 
@@ -779,8 +803,8 @@ pub async fn run(
                     config.review.max_exchanges
                 )
             });
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
+            expose_branch_info(&mut state, &review_branch, &original_branch);
+            finalize_session_state(&mut state, &conversation, &state_tx);
             info!("第{round}轮审查未能达成共识");
             return Ok(());
         }
@@ -822,15 +846,13 @@ pub async fn run(
                 };
 
                 if shutdown_requested {
-                    state.phase = Phase::Done;
-                    state.finished = true;
                     state.log(if state.is_en() {
                         "Shutdown received, ending session"
                     } else {
                         "收到停止信号，提前结束本次会话"
                     });
-                    state.update_preview(&conversation);
-                    let _ = state_tx.send(state.clone());
+                    expose_branch_info(&mut state, &review_branch, &original_branch);
+                    finalize_session_state(&mut state, &conversation, &state_tx);
                     return Ok(());
                 }
 
@@ -867,6 +889,8 @@ pub async fn run(
             }
 
             if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+                expose_branch_info(&mut state, &review_branch, &original_branch);
+                finalize_session_state(&mut state, &conversation, &state_tx);
                 return Ok(());
             }
 
@@ -913,8 +937,8 @@ pub async fn run(
                         } else {
                             format!("写入 review_changelog.md 失败: {e}")
                         });
-                        state.update_preview(&conversation);
-                        let _ = state_tx.send(state.clone());
+                        expose_branch_info(&mut state, &review_branch, &original_branch);
+                        finalize_session_state(&mut state, &conversation, &state_tx);
                         return Err(anyhow::anyhow!(
                             "第{round}轮: 写入 review_changelog.md 失败: {e}"
                         ));
@@ -942,8 +966,8 @@ pub async fn run(
                     } else {
                         format!("第{round}轮: Agent B 修改代码失败: {e}")
                     });
-                    state.update_preview(&conversation);
-                    let _ = state_tx.send(state.clone());
+                    expose_branch_info(&mut state, &review_branch, &original_branch);
+                    finalize_session_state(&mut state, &conversation, &state_tx);
                     return Err(anyhow::anyhow!("第{round}轮: Agent B 修改代码失败: {e}"));
                 }
             }
@@ -969,102 +993,105 @@ pub async fn run(
         }
     }
 
-    // Branch mode: commit changes and wait for merge decision
+    // Branch mode: commit changes and optionally wait for merge decision.
     if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
-        // Auto-commit only session-created changes on the review branch.
-        match git_commit_filtered(
+        // Always expose branch info so main.rs can print follow-up instructions.
+        state.review_branch = Some(rb.clone());
+        state.original_branch = Some(ob.clone());
+
+        let commit_outcome = match git_commit_filtered(
             &project_path,
             &format!("mdtalk: review changes on {rb}"),
             &initial_dirty_paths,
         )
         .await
         {
-            Ok(GitCommitOutcome::Committed) => {
-                state.log(&if state.is_en() {
-                    format!("Changes committed on branch {rb}")
-                } else {
-                    format!("更改已提交到分支 {rb}")
-                });
-            }
-            Ok(GitCommitOutcome::NothingToCommit) => {
-                state.log(if state.is_en() {
-                    "No file changes to commit on review branch"
-                } else {
-                    "审查分支无可提交的文件变更"
-                });
-            }
+            Ok(outcome) => outcome,
             Err(e) => {
                 state.log(&if state.is_en() {
                     format!("Failed to commit changes: {e}")
                 } else {
                     format!("提交更改失败: {e}")
                 });
+                finalize_session_state(&mut state, &conversation, &state_tx);
+                return Err(anyhow::anyhow!("分支模式: 自动提交失败: {e}"));
             }
-        }
+        };
 
-        // Enter WaitingForMerge phase
-        state.phase = Phase::WaitingForMerge;
-        state.review_branch = Some(rb.clone());
-        state.original_branch = Some(ob.clone());
-        state.log(if state.is_en() {
-            "Press Enter to merge, or q to keep branch and exit"
-        } else {
-            "按 Enter 合并分支，或按 q 保留分支并退出"
-        });
-        state.update_preview(&conversation);
-        let _ = state_tx.send(state.clone());
+        match commit_outcome {
+            GitCommitOutcome::Committed => {
+                state.log(&if state.is_en() {
+                    format!("Changes committed on branch {rb}")
+                } else {
+                    format!("更改已提交到分支 {rb}")
+                });
 
-        // Wait for ConfirmMerge or Shutdown
-        let mut do_merge = false;
-        if let Some(ref mut rx) = cmd_rx {
-            loop {
-                match rx.recv().await {
-                    Some(OrchestratorCommand::ConfirmMerge) => {
-                        do_merge = true;
-                        break;
+                // Enter WaitingForMerge phase
+                state.phase = Phase::WaitingForMerge;
+                state.log(if state.is_en() {
+                    "Press Enter to merge, or q to keep branch and exit"
+                } else {
+                    "按 Enter 合并分支，或按 q 保留分支并退出"
+                });
+                state.update_preview(&conversation);
+                let _ = state_tx.send(state.clone());
+
+                // Wait for ConfirmMerge or Shutdown
+                let mut do_merge = false;
+                if let Some(ref mut rx) = cmd_rx {
+                    loop {
+                        match rx.recv().await {
+                            Some(OrchestratorCommand::ConfirmMerge) => {
+                                do_merge = true;
+                                break;
+                            }
+                            Some(OrchestratorCommand::Shutdown) => break,
+                            Some(_) => {} // ignore stale commands
+                            None => break,
+                        }
                     }
-                    Some(OrchestratorCommand::Shutdown) => break,
-                    Some(_) => {} // ignore stale commands
-                    None => break,
                 }
-            }
-        }
 
-        if do_merge {
-            state.log(if state.is_en() {
-                "Merging..."
-            } else {
-                "正在合并..."
-            });
-            let _ = state_tx.send(state.clone());
-            match git_checkout_and_merge(&project_path, ob, rb).await {
-                Ok(()) => {
-                    state.log(&if state.is_en() {
-                        format!("Merged {rb} into {ob}")
+                if do_merge {
+                    state.log(if state.is_en() {
+                        "Merging..."
                     } else {
-                        format!("已将 {rb} 合并到 {ob}")
+                        "正在合并..."
                     });
-                    // Clear branch info since merge is done
-                    state.review_branch = None;
-                    state.original_branch = None;
-                }
-                Err(e) => {
-                    state.log(&if state.is_en() {
-                        format!("Merge failed: {e}")
-                    } else {
-                        format!("合并失败: {e}")
-                    });
-                    // Keep branch info so user can merge manually
+                    let _ = state_tx.send(state.clone());
+                    match git_checkout_and_merge(&project_path, ob, rb).await {
+                        Ok(()) => {
+                            state.log(&if state.is_en() {
+                                format!("Merged {rb} into {ob}")
+                            } else {
+                                format!("已将 {rb} 合并到 {ob}")
+                            });
+                            // Clear branch info since merge is done.
+                            state.review_branch = None;
+                            state.original_branch = None;
+                        }
+                        Err(e) => {
+                            state.log(&if state.is_en() {
+                                format!("Merge failed: {e}")
+                            } else {
+                                format!("合并失败: {e}")
+                            });
+                            // Keep branch info so user can merge manually.
+                        }
+                    }
                 }
             }
+            GitCommitOutcome::NothingToCommit => {
+                state.log(if state.is_en() {
+                    "No file changes to commit on review branch"
+                } else {
+                    "审查分支无可提交的文件变更"
+                });
+            }
         }
-        // If not merging, review_branch/original_branch stay set for main.rs to print instructions
     }
 
-    state.phase = Phase::Done;
-    state.finished = true;
-    state.update_preview(&conversation);
-    let _ = state_tx.send(state.clone());
+    finalize_session_state(&mut state, &conversation, &state_tx);
     info!("审查会话完成 (共{}轮)", config.review.max_rounds);
     Ok(())
 }
@@ -1197,6 +1224,17 @@ mod tests {
         #[cfg(unix)]
         {
             write_script(dir, name, "echo \"I agree\"\nexit 0")
+        }
+    }
+
+    fn script_never_agree(dir: &Path, name: &str) -> String {
+        #[cfg(windows)]
+        {
+            write_script(dir, name, "echo still reviewing\r\nexit /b 0")
+        }
+        #[cfg(unix)]
+        {
+            write_script(dir, name, "echo \"still reviewing\"\nexit 0")
         }
     }
 
@@ -1354,6 +1392,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn branch_mode_keeps_branch_info_when_no_consensus() {
+        let project_dir = unique_test_dir("branch-mode-no-consensus");
+        git_must_succeed(&project_dir, &["init"]);
+        git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
+        git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
+
+        fs::write(project_dir.join("seed.txt"), "base\n").expect("failed to write seed file");
+        git_must_succeed(&project_dir, &["add", "seed.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base"]);
+
+        let a_cmd = script_never_agree(&project_dir, "agent_a_no_consensus");
+        let b_cmd = script_never_agree(&project_dir, "agent_b_no_consensus");
+        let cfg = test_config(project_dir.clone(), a_cmd.clone(), b_cmd.clone());
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        start_tx
+            .send(start_config(a_cmd, b_cmd, true))
+            .expect("failed to send start config");
+
+        let result = run(cfg, state_tx, true, 1, Some(start_rx), None).await;
+        assert!(result.is_ok(), "no-consensus path should return Ok");
+
+        let final_state = state_rx.borrow().clone();
+        assert!(
+            final_state.review_branch.is_some() && final_state.original_branch.is_some(),
+            "branch info should still be exposed when branch mode exits early"
+        );
+
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
     async fn git_commit_filtered_returns_error_outside_git_repo() {
         let project_dir = unique_test_dir("git-commit-non-git");
         fs::write(project_dir.join("file.txt"), "content").expect("failed to write test file");
@@ -1362,6 +1432,85 @@ mod tests {
         assert!(
             result.is_err(),
             "git_commit_filtered should fail when git status cannot run"
+        );
+
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn git_commit_filtered_keeps_unrelated_staged_entries() {
+        let project_dir = unique_test_dir("git-commit-keep-staged");
+        git_must_succeed(&project_dir, &["init"]);
+        git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
+        git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
+
+        fs::write(project_dir.join("keep_staged.txt"), "base\n")
+            .expect("failed to write keep file");
+        fs::write(project_dir.join("session.txt"), "base\n").expect("failed to write session file");
+        git_must_succeed(&project_dir, &["add", "keep_staged.txt", "session.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base"]);
+
+        // Pre-existing staged change should remain staged after the filtered commit.
+        fs::write(project_dir.join("keep_staged.txt"), "preexisting staged\n")
+            .expect("failed to modify keep file");
+        git_must_succeed(&project_dir, &["add", "keep_staged.txt"]);
+
+        // Session change should be committed.
+        fs::write(project_dir.join("session.txt"), "session change\n")
+            .expect("failed to modify session file");
+
+        let mut excluded = HashSet::new();
+        excluded.insert("keep_staged.txt".to_string());
+
+        let outcome = git_commit_filtered(&project_dir, "session commit", &excluded)
+            .await
+            .expect("filtered commit should succeed");
+        assert_eq!(
+            outcome,
+            super::GitCommitOutcome::Committed,
+            "session file should produce a commit"
+        );
+
+        let staged_after = StdCommand::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to inspect staged files");
+        assert!(
+            staged_after.status.success(),
+            "git diff --cached failed: {}",
+            String::from_utf8_lossy(&staged_after.stderr)
+        );
+        let staged_files = String::from_utf8_lossy(&staged_after.stdout);
+        assert!(
+            staged_files
+                .lines()
+                .any(|line| line.trim() == "keep_staged.txt"),
+            "pre-existing staged path should remain staged after filtered commit"
+        );
+
+        let show_output = StdCommand::new("git")
+            .args(["show", "--name-only", "--pretty=format:"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to inspect latest commit");
+        assert!(
+            show_output.status.success(),
+            "git show failed: {}",
+            String::from_utf8_lossy(&show_output.stderr)
+        );
+        let changed_files = String::from_utf8_lossy(&show_output.stdout);
+        assert!(
+            changed_files
+                .lines()
+                .any(|line| line.trim() == "session.txt"),
+            "filtered commit should include session.txt"
+        );
+        assert!(
+            !changed_files
+                .lines()
+                .any(|line| line.trim() == "keep_staged.txt"),
+            "filtered commit should exclude pre-existing staged file"
         );
 
         let _ = fs::remove_dir_all(project_dir);
