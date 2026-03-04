@@ -25,6 +25,15 @@ pub struct AgentRunner {
     timeout: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRunMode {
+    Discussion,
+    Apply,
+}
+
+const WINDOWS_PROMPT_SOFT_LIMIT_BYTES: usize = 7600;
+const DEFAULT_PROMPT_SOFT_LIMIT_BYTES: usize = 65_536;
+
 impl AgentRunner {
     pub fn new(config: &AgentConfig) -> Self {
         let parts = split_command_line(&config.command);
@@ -42,37 +51,79 @@ impl AgentRunner {
         }
     }
 
-    /// Build the CLI arguments depending on which agent we're calling.
-    fn build_args(&self, prompt: &str) -> Vec<String> {
+    /// Build the CLI arguments depending on which agent and stage we're calling.
+    fn build_args(&self, prompt: &str, mode: AgentRunMode) -> Vec<String> {
         match command_name_from_program(&self.command_program).as_str() {
-            "claude" => vec![
-                "-p".to_string(),
-                prompt.to_string(),
-                "--output-format".to_string(),
-                "text".to_string(),
-                "--dangerously-skip-permissions".to_string(),
-            ],
-            "codex" => vec![
-                "exec".to_string(),
-                "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                prompt.to_string(),
-            ],
-            "gemini" => vec!["--approval-mode=yolo".to_string(), prompt.to_string()],
+            "claude" => {
+                let mut args = vec![
+                    "-p".to_string(),
+                    prompt.to_string(),
+                    "--output-format".to_string(),
+                    "text".to_string(),
+                ];
+                if mode == AgentRunMode::Apply {
+                    args.push("--dangerously-skip-permissions".to_string());
+                }
+                args
+            }
+            "codex" => {
+                let mut args = vec!["exec".to_string()];
+                if mode == AgentRunMode::Apply {
+                    args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+                }
+                args.push(prompt.to_string());
+                args
+            }
+            "gemini" => {
+                // Gemini CLI currently exposes approval mode as the practical write-enabling
+                // switch, and does not provide a separate apply-only sandbox bypass flag.
+                vec!["--approval-mode=yolo".to_string(), prompt.to_string()]
+            }
             // Generic fallback: just pass prompt as a single arg
             _ => vec![prompt.to_string()],
         }
     }
 
-    /// Run the agent with the given prompt, in the given project directory.
-    pub async fn run(&self, prompt: &str, project_path: &Path) -> Result<AgentOutput> {
+    fn validate_prompt_length(&self, prompt: &str) -> Result<()> {
+        let limit = if cfg!(windows) {
+            WINDOWS_PROMPT_SOFT_LIMIT_BYTES
+        } else {
+            DEFAULT_PROMPT_SOFT_LIMIT_BYTES
+        };
+        let prompt_len = prompt.len();
+        if prompt_len > limit {
+            anyhow::bail!(
+                "Agent '{}' prompt too long ({} bytes > {} bytes soft limit). \
+                 Keep prompts concise or move long context into files.",
+                self.name,
+                prompt_len,
+                limit
+            );
+        }
+        Ok(())
+    }
+
+    /// Run the agent with explicit stage mode.
+    pub async fn run_with_mode(
+        &self,
+        prompt: &str,
+        project_path: &Path,
+        mode: AgentRunMode,
+    ) -> Result<AgentOutput> {
+        self.validate_prompt_length(prompt)?;
         let mut args = self.command_prefix_args.clone();
-        args.extend(self.build_args(prompt));
+        args.extend(self.build_args(prompt, mode));
         info!(
             agent = %self.name,
             command = %self.command,
+            mode = ?mode,
             "Starting agent"
         );
 
+        self.run_with_args(args, project_path).await
+    }
+
+    async fn run_with_args(&self, args: Vec<String>, project_path: &Path) -> Result<AgentOutput> {
         let start = Instant::now();
 
         let (command_program, command_args) = if cfg!(windows) {
@@ -261,7 +312,7 @@ fn split_command_line(command: &str) -> Vec<String> {
 mod tests {
     use crate::config::AgentConfig;
 
-    use super::AgentRunner;
+    use super::{AgentRunMode, AgentRunner, DEFAULT_PROMPT_SOFT_LIMIT_BYTES};
 
     fn runner(command: &str) -> AgentRunner {
         let cfg = AgentConfig {
@@ -273,8 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn codex_uses_dangerous_bypass_mode() {
-        let args = runner("codex").build_args("hello");
+    fn codex_discussion_mode_avoids_dangerous_bypass_flag() {
+        let args = runner("codex").build_args("hello", AgentRunMode::Discussion);
+        assert!(
+            args.iter()
+                .all(|arg| arg != "--dangerously-bypass-approvals-and-sandbox")
+        );
+    }
+
+    #[test]
+    fn codex_apply_mode_uses_dangerous_bypass_flag() {
+        let args = runner("codex").build_args("hello", AgentRunMode::Apply);
         assert!(
             args.iter()
                 .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
@@ -282,8 +342,17 @@ mod tests {
     }
 
     #[test]
-    fn claude_uses_dangerous_skip_permissions() {
-        let args = runner("claude").build_args("hello");
+    fn claude_discussion_mode_avoids_dangerous_skip_permissions_flag() {
+        let args = runner("claude").build_args("hello", AgentRunMode::Discussion);
+        assert!(
+            args.iter()
+                .all(|arg| arg != "--dangerously-skip-permissions")
+        );
+    }
+
+    #[test]
+    fn claude_apply_mode_uses_dangerous_skip_permissions_flag() {
+        let args = runner("claude").build_args("hello", AgentRunMode::Apply);
         assert!(
             args.iter()
                 .any(|arg| arg == "--dangerously-skip-permissions")
@@ -292,13 +361,13 @@ mod tests {
 
     #[test]
     fn gemini_uses_yolo_mode() {
-        let args = runner("gemini").build_args("hello");
+        let args = runner("gemini").build_args("hello", AgentRunMode::Apply);
         assert!(args.iter().any(|arg| arg == "--approval-mode=yolo"));
     }
 
     #[test]
     fn codex_with_extra_cli_args_still_uses_exec_mode() {
-        let args = runner("codex --model gpt-5").build_args("hello");
+        let args = runner("codex --model gpt-5").build_args("hello", AgentRunMode::Apply);
         assert!(args.iter().any(|arg| arg == "exec"));
         assert!(
             args.iter()
@@ -314,5 +383,15 @@ mod tests {
             runner.command_prefix_args,
             vec!["--model".to_string(), "gpt-5".to_string()]
         );
+    }
+
+    #[test]
+    fn prompt_soft_limit_is_enforced() {
+        let runner = runner("codex");
+        let prompt = "x".repeat(DEFAULT_PROMPT_SOFT_LIMIT_BYTES + 1);
+        let err = runner
+            .validate_prompt_length(&prompt)
+            .expect_err("prompt longer than soft limit should be rejected");
+        assert!(err.to_string().contains("prompt too long"));
     }
 }

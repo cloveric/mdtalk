@@ -213,19 +213,26 @@ async fn main() -> Result<()> {
             }
 
             // Print merge instructions if branch was kept (not merged)
+            let final_state = state_rx_main.borrow().clone();
+            if let (Some(rb), Some(ob)) = (&final_state.review_branch, &final_state.original_branch)
             {
-                let final_state = state_rx_main.borrow();
-                if let (Some(rb), Some(ob)) =
-                    (&final_state.review_branch, &final_state.original_branch)
-                {
-                    eprintln!();
-                    eprintln!("─── Branch Mode ───");
-                    eprintln!("Changes on branch: {rb}");
-                    eprintln!("To review:  git diff {ob}..{rb}");
-                    eprintln!("To merge:   git checkout {ob} && git merge {rb}");
-                    eprintln!();
-                }
+                eprintln!();
+                eprintln!("─── Branch Mode ───");
+                eprintln!("Changes on branch: {rb}");
+                eprintln!("To review:  git diff {ob}..{rb}");
+                eprintln!("To merge:   git checkout {ob} && git merge {rb}");
+                eprintln!();
             }
+
+            // Keep the most recent runtime choices as defaults for restart.
+            cfg.agent_a.name = final_state.agent_a_name.clone();
+            cfg.agent_a.command = final_state.agent_a_name.clone();
+            cfg.agent_a.timeout_secs = final_state.agent_a_timeout_secs;
+            cfg.agent_b.name = final_state.agent_b_name.clone();
+            cfg.agent_b.command = final_state.agent_b_name.clone();
+            cfg.agent_b.timeout_secs = final_state.agent_b_timeout_secs;
+            cfg.review.max_rounds = final_state.max_rounds;
+            cfg.review.max_exchanges = final_state.max_exchanges;
 
             match exit {
                 dashboard::DashboardExit::Restart => continue,

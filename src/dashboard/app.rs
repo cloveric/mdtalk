@@ -5,7 +5,7 @@ use crate::config::{AGENT_PRESETS, StartConfig};
 use crate::orchestrator::{OrchestratorCommand, OrchestratorState};
 
 const TIMEOUT_MIN_SECS: u64 = 60;
-const TIMEOUT_MAX_SECS: u64 = 7200;
+const TIMEOUT_MAX_SECS: u64 = 3600;
 const TIMEOUT_STEP_SECS: u64 = 60;
 const START_FIELD_COUNT: usize = 10;
 const START_LAST_FIELD: usize = START_FIELD_COUNT - 1;

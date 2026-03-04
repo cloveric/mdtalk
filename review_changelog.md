@@ -162,3 +162,31 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-04 20:26:36
+
+已按 `conversation.md` 的共识项完成修复，并直接改了代码。核心变更如下（按 1-15 对应）：
+
+1. 提取 apply 阶段逻辑：新增 `run_apply_phase()`，消除 `run()` 内 apply 分支重复。见 [src/orchestrator.rs](/C:/Users/hangw/mdtalk/src/orchestrator.rs:850)  
+2. 共识判定转折词修复：`check_b_only`/`check_consensus` 改为无歧义判定。见 [src/consensus.rs](/C:/Users/hangw/mdtalk/src/consensus.rs:174)  
+3. `run()` 过长拆分：新增 `run_exchange`、`run_apply_phase`、`run_branch_finalization`。见 [src/orchestrator.rs](/C:/Users/hangw/mdtalk/src/orchestrator.rs:615)  
+4. Agent 参数按阶段区分：新增 `AgentRunMode`（Discussion/Apply），apply 才加危险权限参数；Gemini 保留 `--approval-mode=yolo` 并补注释说明。见 [src/agent.rs](/C:/Users/hangw/mdtalk/src/agent.rs:29)  
+5. `last_a_response/last_b_response` 语义改为 `Option<String>`。见 [src/orchestrator.rs](/C:/Users/hangw/mdtalk/src/orchestrator.rs:665)  
+6. Dashboard timeout 上限下调：`7200 -> 3600`。见 [src/dashboard/app.rs](/C:/Users/hangw/mdtalk/src/dashboard/app.rs:8)  
+7. changelog 追加 TOCTOU 收敛：`create_new`+`open` 加重试处理 `NotFound` 窗口。见 [src/conversation.rs](/C:/Users/hangw/mdtalk/src/conversation.rs:118)  
+8. 关停检查分散问题：收敛到拆分函数内关键点检查，`run()` 主体不再散落大量重复片段。见 [src/orchestrator.rs](/C:/Users/hangw/mdtalk/src/orchestrator.rs:1291)  
+9. 完成后事件循环超时：新增 `FINISHED_SCREEN_MAX_WAIT=30s` 自动退出保护。见 [src/dashboard/mod.rs](/C:/Users/hangw/mdtalk/src/dashboard/mod.rs:24)  
+10. Markdown 着色误判修复：新增 fenced code block 感知，代码块内 `#` 不再按标题高亮，并补单测。见 [src/dashboard/ui.rs](/C:/Users/hangw/mdtalk/src/dashboard/ui.rs:18)  
+11. Windows 临时目录清理增强：`remove_dir_all` 增加重试退避。见 [src/test_utils.rs](/C:/Users/hangw/mdtalk/src/test_utils.rs:34)  
+12. 双语日志重复：新增 `i18n!` 宏并在编排流程中复用。见 [src/orchestrator.rs](/C:/Users/hangw/mdtalk/src/orchestrator.rs:596)  
+13. 英文转折词补充：新增 `while`、`except`。见 [src/consensus.rs](/C:/Users/hangw/mdtalk/src/consensus.rs:30)  
+14. restart 不保留配置：会话结束后把最终运行配置回写到下一轮默认值。见 [src/main.rs](/C:/Users/hangw/mdtalk/src/main.rs:216)  
+15. prompt 长度限制：新增软上限校验，超限直接报错避免命令行长度风险。见 [src/agent.rs](/C:/Users/hangw/mdtalk/src/agent.rs:87)
+
+验证已完成：
+
+- `cargo fmt`
+- `cargo test`（56/56 通过）
+
+
+---
+

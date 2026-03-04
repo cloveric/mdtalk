@@ -7,6 +7,57 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use super::{LOG_AREA_HEIGHT, app::DashboardApp};
 use crate::orchestrator::Phase;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkdownLineKind {
+    HeadingLevel1Or2,
+    HeadingLevel3,
+    HeadingLevel4,
+    Normal,
+}
+
+fn classify_markdown_line(line: &str, in_code_block: bool) -> (MarkdownLineKind, bool) {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return (MarkdownLineKind::Normal, !in_code_block);
+    }
+
+    if in_code_block {
+        return (MarkdownLineKind::Normal, true);
+    }
+
+    if line.starts_with("#### ") {
+        (MarkdownLineKind::HeadingLevel4, false)
+    } else if line.starts_with("### ") {
+        (MarkdownLineKind::HeadingLevel3, false)
+    } else if line.starts_with("## ") || line.starts_with("# ") {
+        (MarkdownLineKind::HeadingLevel1Or2, false)
+    } else {
+        (MarkdownLineKind::Normal, false)
+    }
+}
+
+fn style_conversation_line(line: &str, kind: MarkdownLineKind) -> Line<'static> {
+    match kind {
+        MarkdownLineKind::HeadingLevel4 => Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::Yellow),
+        )),
+        MarkdownLineKind::HeadingLevel3 => Line::from(Span::styled(
+            line.to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        MarkdownLineKind::HeadingLevel1Or2 => Line::from(Span::styled(
+            line.to_string(),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        MarkdownLineKind::Normal => Line::from(line.to_string()),
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &DashboardApp) {
     if app.waiting_for_start {
         draw_start_screen(f, app);
@@ -339,36 +390,17 @@ fn draw_content(f: &mut Frame, app: &DashboardApp, area: Rect) {
         .split(area);
 
     // Left: Conversation preview
-    let conv_lines: Vec<Line> = state
+    let mut in_code_block = false;
+    let mut conv_lines: Vec<Line> = Vec::new();
+    for line in state
         .conversation_preview
         .lines()
         .skip(app.scroll_offset as usize)
-        .map(|line| {
-            // Match from longest prefix to shortest to avoid #### being caught by ###
-            if line.starts_with("#### ") {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::Yellow),
-                ))
-            } else if line.starts_with("### ") {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-            } else if line.starts_with("## ") || line.starts_with("# ") {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ))
-            } else {
-                Line::from(line.to_string())
-            }
-        })
-        .collect();
+    {
+        let (kind, next_in_code_block) = classify_markdown_line(line, in_code_block);
+        in_code_block = next_in_code_block;
+        conv_lines.push(style_conversation_line(line, kind));
+    }
 
     let conv_block = Block::default().borders(Borders::ALL).title(if en {
         " Conversation "
@@ -508,4 +540,34 @@ fn draw_logs(f: &mut Frame, app: &DashboardApp, area: Rect) {
             .title(if en { " Logs " } else { " 日志 " });
     let paragraph = Paragraph::new(log_lines).block(block);
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MarkdownLineKind, classify_markdown_line};
+
+    #[test]
+    fn markdown_heading_is_detected_outside_code_block() {
+        let (kind, in_code_block) = classify_markdown_line("### Heading", false);
+        assert_eq!(kind, MarkdownLineKind::HeadingLevel3);
+        assert!(!in_code_block);
+    }
+
+    #[test]
+    fn hash_lines_inside_code_block_are_not_treated_as_headings() {
+        let (_, in_code_block) = classify_markdown_line("```rust", false);
+        let (kind, still_in_code_block) = classify_markdown_line("# not heading", in_code_block);
+        assert_eq!(kind, MarkdownLineKind::Normal);
+        assert!(still_in_code_block);
+    }
+
+    #[test]
+    fn closing_fence_exits_code_block_mode() {
+        let (_, in_code_block) = classify_markdown_line("```", false);
+        let (_, in_code_block) = classify_markdown_line("content", in_code_block);
+        let (_, in_code_block) = classify_markdown_line("```", in_code_block);
+        let (kind, in_code_block) = classify_markdown_line("## heading", in_code_block);
+        assert_eq!(kind, MarkdownLineKind::HeadingLevel1Or2);
+        assert!(!in_code_block);
+    }
 }

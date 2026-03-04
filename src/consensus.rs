@@ -33,6 +33,8 @@ const ENGLISH_TURNING_TOKENS: &[&str] = &[
     "although",
     "though",
     "yet",
+    "while",
+    "except",
     "nevertheless",
     "nonetheless",
 ];
@@ -170,7 +172,7 @@ fn agent_shows_consensus(response: &str, keywords: &[String], require_unambiguou
 /// Used when: (a) max_exchanges == 1 (only one shot), or (b) it's the last exchange
 /// (exhausted all exchanges — apply whatever was agreed).
 pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
-    if agent_shows_consensus(agent_b_response, keywords, false) {
+    if agent_shows_consensus(agent_b_response, keywords, true) {
         ConsensusResult {
             reached: true,
             summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
@@ -216,8 +218,8 @@ pub fn check_consensus(
     agent_b_response: &str,
     keywords: &[String],
 ) -> ConsensusResult {
-    let a_consensus = agent_shows_consensus(agent_a_response, keywords, false);
-    let b_consensus = agent_shows_consensus(agent_b_response, keywords, false);
+    let a_consensus = agent_shows_consensus(agent_a_response, keywords, true);
+    let b_consensus = agent_shows_consensus(agent_b_response, keywords, true);
 
     if a_consensus && b_consensus {
         return ConsensusResult {
@@ -301,36 +303,34 @@ mod tests {
     }
 
     #[test]
-    fn mixed_agree_and_disagree_is_partial_consensus() {
-        // Agent A agrees with some, disagrees with others — partial agreement counts
+    fn mixed_agree_and_disagree_is_not_unambiguous_consensus() {
         let r = check_consensus(
             "I agree with points 1-3, but I don't agree with point 4.",
             "I agree with all the suggestions. LGTM.",
             &kws(),
         );
-        assert!(r.reached);
+        assert!(!r.reached);
     }
 
     #[test]
-    fn mixed_chinese_agree_disagree_is_partial_consensus() {
+    fn mixed_chinese_agree_disagree_is_not_unambiguous_consensus() {
         let kws = vec!["同意".into()];
         let r = check_consensus(
             "我同意前三条建议，但不同意第四条。",
             "我同意所有改进建议。",
             &kws,
         );
-        assert!(r.reached);
+        assert!(!r.reached);
     }
 
     #[test]
-    fn explicit_disagree_with_affirmative_is_partial_consensus() {
-        // A says "agree" AND "disagree" — has affirmative keyword, counts as partial
+    fn explicit_disagree_with_affirmative_is_not_unambiguous_consensus() {
         let r = check_consensus(
             "I agree with most points, but I disagree with item 3.",
             "I agree with the updated review.",
             &kws(),
         );
-        assert!(r.reached);
+        assert!(!r.reached);
     }
 
     #[test]
@@ -366,6 +366,50 @@ mod tests {
     fn full_only_rejects_turning_word_after_affirmative_chinese() {
         let kws = vec!["同意".into(), "部分同意".into()];
         let r = check_b_full_only("我同意前三条建议，但是第四条我不同意。", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_turning_word_after_affirmative_while() {
+        let kws = vec!["agree".into()];
+        let r = check_b_full_only(
+            "I agree with this approach, while item 4 still has a blocker.",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn full_only_rejects_turning_word_after_affirmative_except() {
+        let kws = vec!["agree".into()];
+        let r = check_b_full_only("I agree, except point 4 still looks incorrect.", &kws);
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn b_only_rejects_turning_word_after_affirmative() {
+        let kws = vec!["agree".into(), "同意".into()];
+        let r = check_b_only(
+            "I agree with items 1-3, but point 4 is completely wrong.",
+            &kws,
+        );
+        assert!(!r.reached);
+    }
+
+    #[test]
+    fn b_only_accepts_explicit_partial_keyword_without_turning() {
+        let kws = vec!["partially agree".into()];
+        let r = check_b_only("CONCLUSION: partially agree", &kws);
+        assert!(r.reached);
+    }
+
+    #[test]
+    fn bilateral_consensus_requires_unambiguous_agreement() {
+        let r = check_consensus(
+            "I agree with items 1-3, but I disagree with item 4.",
+            "I agree with all points.",
+            &kws(),
+        );
         assert!(!r.reached);
     }
 

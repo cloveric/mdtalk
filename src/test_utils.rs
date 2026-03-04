@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -14,7 +15,7 @@ impl TestTempDir {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
         let path =
             std::env::temp_dir().join(format!("mdtalk-{scope}-{name}-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
+        remove_dir_all_with_retries(&path);
         std::fs::create_dir_all(&path).expect("failed to create test dir");
         Self { path }
     }
@@ -26,6 +27,20 @@ impl TestTempDir {
 
 impl Drop for TestTempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        remove_dir_all_with_retries(&self.path);
+    }
+}
+
+fn remove_dir_all_with_retries(path: &Path) {
+    const MAX_ATTEMPTS: usize = 6;
+    for attempt in 0..MAX_ATTEMPTS {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) if attempt + 1 < MAX_ATTEMPTS => {
+                std::thread::sleep(Duration::from_millis(50 * (attempt as u64 + 1)));
+            }
+            Err(_) => return,
+        }
     }
 }

@@ -21,6 +21,7 @@ use crate::orchestrator::{OrchestratorCommand, OrchestratorState, Phase};
 
 pub const LOG_AREA_HEIGHT: u16 = 6;
 pub const LOG_VISIBLE_LINES: u16 = LOG_AREA_HEIGHT.saturating_sub(2);
+const FINISHED_SCREEN_MAX_WAIT: Duration = Duration::from_secs(30);
 
 /// What the dashboard returns when it exits.
 pub enum DashboardExit {
@@ -125,9 +126,14 @@ fn run_dashboard_loop(
 
             if finished {
                 terminal.draw(|f| ui::draw(f, &app))?;
+                let wait_deadline = Instant::now() + FINISHED_SCREEN_MAX_WAIT;
                 loop {
                     events::handle_events(&mut app, Duration::from_millis(200))?;
                     if app.should_quit {
+                        break;
+                    }
+                    if Instant::now() >= wait_deadline {
+                        app.should_quit = true;
                         break;
                     }
                     terminal.draw(|f| ui::draw(f, &app))?;

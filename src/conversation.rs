@@ -124,18 +124,28 @@ pub fn append_changelog_with_language(
     let path = project_dir.join("review_changelog.md");
 
     let mut wrote_header = false;
-    let mut file = match OpenOptions::new().create_new(true).append(true).open(&path) {
-        Ok(file) => {
-            wrote_header = true;
-            file
-        }
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("Failed to open changelog {:?}", path))?,
-        Err(e) => {
-            return Err(e).with_context(|| format!("Failed to create changelog {:?}", path));
+    let mut file = loop {
+        match OpenOptions::new().create_new(true).append(true).open(&path) {
+            Ok(file) => {
+                wrote_header = true;
+                break file;
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                match OpenOptions::new().append(true).open(&path) {
+                    Ok(file) => break file,
+                    Err(open_err) if open_err.kind() == ErrorKind::NotFound => {
+                        // File disappeared between create_new and open; retry.
+                        continue;
+                    }
+                    Err(open_err) => {
+                        return Err(open_err)
+                            .with_context(|| format!("Failed to open changelog {:?}", path));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to create changelog {:?}", path));
+            }
         }
     };
 

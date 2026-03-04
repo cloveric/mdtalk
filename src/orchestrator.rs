@@ -8,7 +8,7 @@ use tracing::{error, info};
 
 use tokio::process::Command as TokioCommand;
 
-use crate::agent::{AgentOutput, AgentRunner};
+use crate::agent::{AgentOutput, AgentRunMode, AgentRunner};
 use crate::config::MdtalkConfig;
 use crate::consensus;
 use crate::conversation::Conversation;
@@ -243,12 +243,13 @@ async fn run_agent_with_heartbeat(
     agent: &AgentRunner,
     prompt: &str,
     project_path: &Path,
+    mode: AgentRunMode,
     label: &str,
     state: &mut OrchestratorState,
     state_tx: &watch::Sender<OrchestratorState>,
 ) -> Result<AgentOutput> {
     let start = Instant::now();
-    let agent_fut = agent.run(prompt, project_path);
+    let agent_fut = agent.run_with_mode(prompt, project_path, mode);
     tokio::pin!(agent_fut);
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
@@ -307,7 +308,8 @@ Please thoroughly read the project's source files (src/ directory) and provide a
 - Code quality issues\n\
 - Architecture/design issues\n\
 - Improvement suggestions\n\n\
-Prioritize findings by severity."
+Prioritize findings by severity.\n\n\
+CRITICAL: Do NOT modify any source code files. Only review and report issues."
                 .to_string(),
             ExchangeKind::RoundReReview => {
                 let modification_context = if previous_round_code_modified {
@@ -318,7 +320,8 @@ Prioritize findings by severity."
                 format!(
                     "You are participating in a multi-agent code review workflow. \
 {modification_context} \
-First read the full review history in {conv_filename}, then re-review src/ to verify previously identified issues are fixed and to detect any newly introduced issues."
+First read the full review history in {conv_filename}, then re-review src/ to verify previously identified issues are fixed and to detect any newly introduced issues.\n\n\
+CRITICAL: Do NOT modify any source code files. Only review and report issues."
                 )
             }
             ExchangeKind::FollowUp => format!(
@@ -326,6 +329,7 @@ First read the full review history in {conv_filename}, then re-review src/ to ve
 First read the full conversation history in {conv_filename}.\n\n\
 Then continue the discussion based on Agent B's latest response. \
 State whether you agree and provide further thoughts.\n\n\
+CRITICAL: Do NOT modify any source code files. Only discuss and verify.\n\n\
 You MUST end your response with one of these exact conclusion lines:\n\
   If you fully agree: CONCLUSION: I agree\n\
   If you partially agree: CONCLUSION: partially agree\n\
@@ -341,7 +345,8 @@ You MUST end your response with one of these exact conclusion lines:\n\
 - 代码质量问题\n\
 - 架构设计问题\n\
 - 改进建议\n\n\
-请按优先级排列你的发现。"
+请按优先级排列你的发现。\n\n\
+严禁修改任何源代码文件！只进行审查和报告问题。"
             .to_string(),
         ExchangeKind::RoundReReview => {
             let modification_context = if previous_round_code_modified {
@@ -354,13 +359,15 @@ You MUST end your response with one of these exact conclusion lines:\n\
 {modification_context}\
 请先阅读当前目录下的 {conv_filename} 文件了解完整的审查对话历史，\
 然后重新审查 src/ 目录下的源代码，检查之前发现的问题是否已修复，\
-以及是否引入了新问题。给出你的审查意见。"
+以及是否引入了新问题。给出你的审查意见。\n\n\
+严禁修改任何源代码文件！只进行审查和报告问题。"
             )
         }
         ExchangeKind::FollowUp => format!(
             "你正在参与一个多 agent 代码审查流程。\
 请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
 然后根据 Agent B 的最新反馈继续讨论，表达你的看法。\n\n\
+严禁修改任何源代码文件！只进行讨论和验证。\n\n\
 你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
   完全同意：结论：同意\n\
   部分同意：结论：部分同意\n\
@@ -384,6 +391,8 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
                      Full agreement: write exactly → CONCLUSION: I agree\n\
                      Partial agreement: write exactly → CONCLUSION: partially agree\n\
                      Disagree: write exactly → CONCLUSION: I disagree\n\n\
+                CRITICAL: Do NOT modify any source code files. Your role is to verify and discuss only. \
+                Code changes will be applied in a separate phase after consensus is reached.\n\n\
                 Important: output the full review content directly; do not only report which files you read."
             ),
             ExchangeKind::FollowUp => format!(
@@ -391,6 +400,7 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
                 First read the full conversation history in {conv_filename}.\n\n\
                 Then continue the discussion based on Agent A's latest response. \
                 State whether you agree and provide further thoughts.\n\n\
+                CRITICAL: Do NOT modify any source code files. Only discuss and verify.\n\n\
                 You MUST end your response with one of these exact conclusion lines:\n\
                   If you fully agree: CONCLUSION: I agree\n\
                   If you partially agree: CONCLUSION: partially agree\n\
@@ -412,12 +422,14 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
                  完全认可：写 → 结论：同意\n\
                  部分认可：写 → 结论：部分同意\n\
                  存在重大分歧：写 → 结论：不同意\n\n\
+            严禁修改任何源代码文件！你的职责仅限于验证和讨论。代码修改将在达成共识后的专门阶段执行。\n\n\
             重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
         ),
         ExchangeKind::FollowUp => format!(
             "你正在参与一个多 agent 代码审查流程。\
             请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
             然后根据 Agent A 的最新反馈继续讨论，表达你的看法。\n\n\
+            严禁修改任何源代码文件！只进行讨论和验证。\n\n\
             你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
               完全同意：结论：同意\n\
               部分同意：结论：部分同意\n\
@@ -592,6 +604,528 @@ fn finalize_session_state(
     let _ = state_tx.send(state.clone());
 }
 
+macro_rules! i18n {
+    ($state:expr, $en:expr, $zh:expr) => {
+        if $state.is_en() { $en } else { $zh }
+    };
+}
+
+enum ExchangeOutcome {
+    Continue,
+    ConsensusReached,
+    ShutdownRequested,
+    ExecutionError(anyhow::Error),
+}
+
+enum ApplyPhaseOutcome {
+    Applied,
+    Skipped,
+    ShutdownRequested,
+}
+
+async fn run_exchange(
+    round: u32,
+    exchange: u32,
+    config: &MdtalkConfig,
+    previous_round_code_modified: bool,
+    conv_filename: &str,
+    project_path: &Path,
+    agent_a: &AgentRunner,
+    agent_b: &AgentRunner,
+    conversation: &Conversation,
+    state: &mut OrchestratorState,
+    state_tx: &watch::Sender<OrchestratorState>,
+    cmd_rx: &mut Option<mpsc::Receiver<OrchestratorCommand>>,
+) -> Result<ExchangeOutcome> {
+    state.current_exchange = exchange;
+    let exchange_kind = classify_exchange(round, exchange);
+
+    if consume_shutdown_command(cmd_rx, state, state_tx) {
+        return Ok(ExchangeOutcome::ShutdownRequested);
+    }
+
+    if should_append_round_header(exchange) {
+        conversation.append_round_header_with_language(round, state.is_en())?;
+    }
+
+    state.phase = Phase::AgentAReviewing;
+    state.log(&i18n!(
+        state,
+        format!("R{round} E{exchange}: Agent A ({}) reviewing", agent_a.name),
+        format!(
+            "第{round}轮 讨论{exchange}: Agent A ({}) 开始审查",
+            agent_a.name
+        )
+    ));
+    let _ = state_tx.send(state.clone());
+
+    let a_prompt = build_agent_a_prompt(
+        exchange_kind,
+        conv_filename,
+        previous_round_code_modified,
+        state.is_en(),
+    );
+    let a_label = i18n!(
+        state,
+        format!(
+            "Round {round} Exchange {exchange}: Agent A ({})",
+            agent_a.name
+        ),
+        format!("第{round}轮 讨论{exchange}: Agent A ({})", agent_a.name)
+    );
+    let last_a_response = match run_agent_with_heartbeat(
+        agent_a,
+        &a_prompt,
+        project_path,
+        AgentRunMode::Discussion,
+        &a_label,
+        state,
+        state_tx,
+    )
+    .await
+    {
+        Ok(output) => {
+            let response = output.content;
+            let label = discussion_role_label(exchange_kind, state.is_en());
+            conversation.append_agent_entry(&agent_a.name, label, &response)?;
+            state.log(&i18n!(
+                state,
+                format!(
+                    "R{round} E{exchange}: Agent A done ({:.0}s)",
+                    output.duration.as_secs_f64()
+                ),
+                format!(
+                    "第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)",
+                    output.duration.as_secs_f64()
+                )
+            ));
+            Some(response)
+        }
+        Err(e) => {
+            if state.is_en() {
+                error!("Round {round} Exchange {exchange} Agent A failed: {e}");
+            } else {
+                error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
+            }
+            state.log(&i18n!(
+                state,
+                format!("R{round} E{exchange}: Agent A failed: {e}"),
+                format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}")
+            ));
+            let _ = state_tx.send(state.clone());
+            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(i18n!(
+                state,
+                format!("Round {round} Exchange {exchange}: Agent A execution failed: {e}"),
+                format!("第{round}轮 讨论{exchange}: Agent A 执行失败: {e}")
+            ))));
+        }
+    };
+
+    state.update_preview(conversation);
+    let _ = state_tx.send(state.clone());
+
+    state.phase = Phase::AgentBResponding;
+    state.log(&i18n!(
+        state,
+        format!(
+            "R{round} E{exchange}: Agent B ({}) responding",
+            agent_b.name
+        ),
+        format!(
+            "第{round}轮 讨论{exchange}: Agent B ({}) 开始回应",
+            agent_b.name
+        )
+    ));
+    let _ = state_tx.send(state.clone());
+
+    let b_prompt = build_agent_b_prompt(exchange_kind, conv_filename, state.is_en());
+    let b_label = i18n!(
+        state,
+        format!(
+            "Round {round} Exchange {exchange}: Agent B ({})",
+            agent_b.name
+        ),
+        format!("第{round}轮 讨论{exchange}: Agent B ({})", agent_b.name)
+    );
+    let last_b_response = match run_agent_with_heartbeat(
+        agent_b,
+        &b_prompt,
+        project_path,
+        AgentRunMode::Discussion,
+        &b_label,
+        state,
+        state_tx,
+    )
+    .await
+    {
+        Ok(output) => {
+            let response = output.content;
+            conversation.append_agent_entry(
+                &agent_b.name,
+                if state.is_en() { "Response" } else { "回应" },
+                &response,
+            )?;
+            state.log(&i18n!(
+                state,
+                format!(
+                    "R{round} E{exchange}: Agent B done ({:.0}s)",
+                    output.duration.as_secs_f64()
+                ),
+                format!(
+                    "第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)",
+                    output.duration.as_secs_f64()
+                )
+            ));
+            Some(response)
+        }
+        Err(e) => {
+            if state.is_en() {
+                error!("Round {round} Exchange {exchange} Agent B failed: {e}");
+            } else {
+                error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
+            }
+            state.log(&i18n!(
+                state,
+                format!("R{round} E{exchange}: Agent B failed: {e}"),
+                format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}")
+            ));
+            let _ = state_tx.send(state.clone());
+            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(i18n!(
+                state,
+                format!("Round {round} Exchange {exchange}: Agent B execution failed: {e}"),
+                format!("第{round}轮 讨论{exchange}: Agent B 执行失败: {e}")
+            ))));
+        }
+    };
+
+    state.update_preview(conversation);
+    let _ = state_tx.send(state.clone());
+
+    state.phase = Phase::CheckConsensus;
+    let _ = state_tx.send(state.clone());
+
+    let is_last = exchange == config.review.max_exchanges;
+    let result = if is_last {
+        let Some(last_b_response) = last_b_response.as_deref() else {
+            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
+                "internal error: missing Agent B response at consensus stage"
+            )));
+        };
+        consensus::check_b_only(last_b_response, &config.review.consensus_keywords)
+    } else if exchange == 1 {
+        let Some(last_b_response) = last_b_response.as_deref() else {
+            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
+                "internal error: missing Agent B response at consensus stage"
+            )));
+        };
+        consensus::check_b_full_only(last_b_response, &config.review.consensus_keywords)
+    } else {
+        let (Some(last_a_response), Some(last_b_response)) =
+            (last_a_response.as_deref(), last_b_response.as_deref())
+        else {
+            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
+                "internal error: missing exchange response at consensus stage"
+            )));
+        };
+        consensus::check_consensus(
+            last_a_response,
+            last_b_response,
+            &config.review.consensus_keywords,
+        )
+    };
+
+    if result.reached {
+        state.log(&i18n!(
+            state,
+            format!("R{round} E{exchange}: consensus reached"),
+            format!("第{round}轮 讨论{exchange}: 达成共识")
+        ));
+        let summary = if state.is_en() {
+            "Both agents explicitly expressed consensus via the configured keywords.".to_string()
+        } else {
+            result.summary.clone()
+        };
+        conversation.append_consensus_with_language(&summary, state.is_en())?;
+        return Ok(ExchangeOutcome::ConsensusReached);
+    }
+
+    state.log(&i18n!(
+        state,
+        format!("R{round} E{exchange}: no consensus, continuing..."),
+        format!("第{round}轮 讨论{exchange}: 未达成共识，继续讨论...")
+    ));
+    let _ = state_tx.send(state.clone());
+    Ok(ExchangeOutcome::Continue)
+}
+
+async fn run_apply_phase(
+    round: u32,
+    no_apply: bool,
+    auto_apply: bool,
+    apply_level: u32,
+    conv_filename: &str,
+    project_path: &Path,
+    agent_b: &AgentRunner,
+    conversation: &Conversation,
+    state: &mut OrchestratorState,
+    state_tx: &watch::Sender<OrchestratorState>,
+    cmd_rx: &mut Option<mpsc::Receiver<OrchestratorCommand>>,
+) -> Result<ApplyPhaseOutcome> {
+    if no_apply {
+        state.log(&i18n!(
+            state,
+            format!("Round {round}: skipping apply (--no-apply)"),
+            format!("第{round}轮: 跳过代码修改 (--no-apply)")
+        ));
+        let _ = state_tx.send(state.clone());
+        return Ok(ApplyPhaseOutcome::Skipped);
+    }
+
+    if !auto_apply {
+        state.phase = Phase::WaitingForApply;
+        state.log(&i18n!(
+            state,
+            format!("Round {round}: waiting for apply confirmation..."),
+            format!("第{round}轮: 等待用户确认执行修改...")
+        ));
+        let _ = state_tx.send(state.clone());
+
+        let mut shutdown_requested = false;
+        let confirmed = if let Some(rx) = cmd_rx {
+            loop {
+                match rx.recv().await {
+                    Some(OrchestratorCommand::ConfirmApply) => break true,
+                    Some(OrchestratorCommand::Shutdown) => {
+                        shutdown_requested = true;
+                        break false;
+                    }
+                    Some(_) => {}
+                    None => break true,
+                }
+            }
+        } else {
+            true
+        };
+
+        if shutdown_requested {
+            state.log(i18n!(
+                state,
+                "Shutdown received, ending session",
+                "收到停止信号，提前结束本次会话"
+            ));
+            return Ok(ApplyPhaseOutcome::ShutdownRequested);
+        }
+
+        if !confirmed {
+            state.log(&i18n!(
+                state,
+                format!("Round {round}: user cancelled apply"),
+                format!("第{round}轮: 用户取消修改")
+            ));
+            let _ = state_tx.send(state.clone());
+            return Ok(ApplyPhaseOutcome::Skipped);
+        }
+
+        state.log(&i18n!(
+            state,
+            format!("Round {round}: user confirmed, applying..."),
+            format!("第{round}轮: 用户已确认，开始修改...")
+        ));
+    }
+
+    if consume_shutdown_command(cmd_rx, state, state_tx) {
+        return Ok(ApplyPhaseOutcome::ShutdownRequested);
+    }
+
+    state.phase = Phase::ApplyChanges;
+    state.log(&i18n!(
+        state,
+        format!("Round {round}: Agent B applying changes..."),
+        format!("第{round}轮: Agent B 开始根据共识修改代码...")
+    ));
+    let _ = state_tx.send(state.clone());
+
+    let apply_prompt = build_apply_prompt(conv_filename, apply_level, state.is_en());
+    let apply_label = i18n!(
+        state,
+        format!("Round {round} Code Changes: Agent B ({})", agent_b.name),
+        format!("第{round}轮 代码修改: Agent B ({})", agent_b.name)
+    );
+    let output = run_agent_with_heartbeat(
+        agent_b,
+        &apply_prompt,
+        project_path,
+        AgentRunMode::Apply,
+        &apply_label,
+        state,
+        state_tx,
+    )
+    .await
+    .map_err(|e| {
+        anyhow::anyhow!(i18n!(
+            state,
+            format!("Round {round}: Agent B apply failed: {e}"),
+            format!("第{round}轮: Agent B 修改代码失败: {e}")
+        ))
+    })?;
+
+    conversation.append_agent_entry(
+        &agent_b.name,
+        if state.is_en() {
+            "Code Changes"
+        } else {
+            "代码修改"
+        },
+        &output.content,
+    )?;
+
+    if let Err(e) = crate::conversation::append_changelog_with_language(
+        project_path,
+        round,
+        &output.content,
+        state.is_en(),
+    ) {
+        state.log(&i18n!(
+            state,
+            format!("Failed to write review_changelog.md: {e}"),
+            format!("写入 review_changelog.md 失败: {e}")
+        ));
+        anyhow::bail!(
+            "{}",
+            i18n!(
+                state,
+                format!("Round {round}: failed to write review_changelog.md: {e}"),
+                format!("第{round}轮: 写入 review_changelog.md 失败: {e}")
+            )
+        );
+    }
+
+    state.log(i18n!(
+        state,
+        "review_changelog.md updated",
+        "review_changelog.md 已更新"
+    ));
+    state.log(&i18n!(
+        state,
+        format!(
+            "Round {round}: Agent B apply done ({:.0}s)",
+            output.duration.as_secs_f64()
+        ),
+        format!(
+            "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
+            output.duration.as_secs_f64()
+        )
+    ));
+
+    state.update_preview(conversation);
+    let _ = state_tx.send(state.clone());
+
+    Ok(ApplyPhaseOutcome::Applied)
+}
+
+async fn run_branch_finalization(
+    project_path: &Path,
+    review_branch: &Option<String>,
+    original_branch: &Option<String>,
+    initial_dirty_paths: &HashSet<String>,
+    cmd_rx: &mut Option<mpsc::Receiver<OrchestratorCommand>>,
+    conversation: &Conversation,
+    state: &mut OrchestratorState,
+    state_tx: &watch::Sender<OrchestratorState>,
+) -> Result<()> {
+    let (Some(rb), Some(ob)) = (review_branch, original_branch) else {
+        return Ok(());
+    };
+
+    state.review_branch = Some(rb.clone());
+    state.original_branch = Some(ob.clone());
+
+    let commit_outcome = git_commit_filtered(
+        project_path,
+        &format!("mdtalk: review changes on {rb}"),
+        initial_dirty_paths,
+    )
+    .await
+    .map_err(|e| {
+        state.log(&i18n!(
+            state,
+            format!("Failed to commit changes: {e}"),
+            format!("提交更改失败: {e}")
+        ));
+        anyhow::anyhow!(i18n!(
+            state,
+            format!("Branch mode: auto-commit failed: {e}"),
+            format!("分支模式: 自动提交失败: {e}")
+        ))
+    })?;
+
+    match commit_outcome {
+        GitCommitOutcome::Committed => {
+            state.log(&i18n!(
+                state,
+                format!("Changes committed on branch {rb}"),
+                format!("更改已提交到分支 {rb}")
+            ));
+
+            state.phase = Phase::WaitingForMerge;
+            state.log(i18n!(
+                state,
+                "Press Enter to merge, or q to keep branch and exit",
+                "按 Enter 合并分支，或按 q 保留分支并退出"
+            ));
+            state.update_preview(conversation);
+            let _ = state_tx.send(state.clone());
+
+            let mut do_merge = false;
+            if let Some(rx) = cmd_rx {
+                loop {
+                    match rx.recv().await {
+                        Some(OrchestratorCommand::ConfirmMerge) => {
+                            do_merge = true;
+                            break;
+                        }
+                        Some(OrchestratorCommand::Shutdown) => break,
+                        Some(_) => {}
+                        None => break,
+                    }
+                }
+            }
+
+            if do_merge {
+                state.log(i18n!(state, "Merging...", "正在合并..."));
+                let _ = state_tx.send(state.clone());
+                match git_checkout_and_merge(project_path, ob, rb).await {
+                    Ok(()) => {
+                        state.log(&i18n!(
+                            state,
+                            format!("Merged {rb} into {ob}"),
+                            format!("已将 {rb} 合并到 {ob}")
+                        ));
+                        state.review_branch = None;
+                        state.original_branch = None;
+                    }
+                    Err(e) => {
+                        state.log(&i18n!(
+                            state,
+                            format!("Merge failed: {e}"),
+                            format!("合并失败: {e}")
+                        ));
+                    }
+                }
+            }
+        }
+        GitCommitOutcome::NothingToCommit => {
+            state.log(i18n!(
+                state,
+                "No file changes to commit on review branch",
+                "审查分支无可提交的文件变更"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 impl OrchestratorState {
     pub fn new(config: &MdtalkConfig) -> Self {
         Self {
@@ -740,17 +1274,17 @@ pub async fn run(
     // === Outer loop: rounds (each round = discussion → consensus → code fix) ===
     for round in 1..=config.review.max_rounds {
         state.current_round = round;
-        state.log(&if state.is_en() {
+        state.log(&i18n!(
+            state,
             format!(
                 "===== Round {round} started ({} total) =====",
                 config.review.max_rounds
-            )
-        } else {
+            ),
             format!(
                 "===== 第{round}轮审查开始 (共{}轮) =====",
                 config.review.max_rounds
             )
-        });
+        ));
         let _ = state_tx.send(state.clone());
 
         if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
@@ -761,231 +1295,41 @@ pub async fn run(
 
         let round_start = Instant::now();
         let mut consensus_reached = false;
-        let mut code_modified_in_round = false;
         let mut execution_error: Option<anyhow::Error> = None;
 
         // === Inner loop: exchanges (A speaks + B speaks + consensus check) ===
         for exchange in 1..=config.review.max_exchanges {
-            state.current_exchange = exchange;
-            let exchange_kind = classify_exchange(round, exchange);
-
-            if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
-                expose_branch_info(&mut state, &review_branch, &original_branch);
-                finalize_session_state(&mut state, &conversation, &state_tx);
-                return Ok(());
-            }
-
-            // Round header is written once for each outer round.
-            if should_append_round_header(exchange) {
-                conversation.append_round_header_with_language(round, state.is_en())?;
-            }
-
-            // --- Agent A reviews ---
-            state.phase = Phase::AgentAReviewing;
-            state.log(&if state.is_en() {
-                format!("R{round} E{exchange}: Agent A ({}) reviewing", agent_a.name)
-            } else {
-                format!(
-                    "第{round}轮 讨论{exchange}: Agent A ({}) 开始审查",
-                    agent_a.name
-                )
-            });
-            let _ = state_tx.send(state.clone());
-
-            let a_prompt = build_agent_a_prompt(
-                exchange_kind,
-                &conv_filename,
+            match run_exchange(
+                round,
+                exchange,
+                &config,
                 previous_round_code_modified,
-                state.is_en(),
-            );
-
-            let a_label = if state.is_en() {
-                format!(
-                    "Round {round} Exchange {exchange}: Agent A ({})",
-                    agent_a.name
-                )
-            } else {
-                format!("第{round}轮 讨论{exchange}: Agent A ({})", agent_a.name)
-            };
-            let last_a_response = match run_agent_with_heartbeat(
+                &conv_filename,
+                &project_path,
                 &agent_a,
-                &a_prompt,
-                &project_path,
-                &a_label,
-                &mut state,
-                &state_tx,
-            )
-            .await
-            {
-                Ok(output) => {
-                    let response = output.content;
-                    let label = discussion_role_label(exchange_kind, state.is_en());
-                    conversation.append_agent_entry(&agent_a.name, label, &response)?;
-                    state.log(&if state.is_en() {
-                        format!(
-                            "R{round} E{exchange}: Agent A done ({:.0}s)",
-                            output.duration.as_secs_f64()
-                        )
-                    } else {
-                        format!(
-                            "第{round}轮 讨论{exchange}: Agent A 完成 ({:.0}秒)",
-                            output.duration.as_secs_f64()
-                        )
-                    });
-                    response
-                }
-                Err(e) => {
-                    if state.is_en() {
-                        error!("Round {round} Exchange {exchange} Agent A failed: {e}");
-                    } else {
-                        error!("第{round}轮 讨论{exchange} Agent A 失败: {e}");
-                    }
-                    state.log(&if state.is_en() {
-                        format!("R{round} E{exchange}: Agent A failed: {e}")
-                    } else {
-                        format!("第{round}轮 讨论{exchange}: Agent A 失败: {e}")
-                    });
-                    let _ = state_tx.send(state.clone());
-                    execution_error = Some(anyhow::anyhow!(if state.is_en() {
-                        format!("Round {round} Exchange {exchange}: Agent A execution failed: {e}")
-                    } else {
-                        format!("第{round}轮 讨论{exchange}: Agent A 执行失败: {e}")
-                    }));
-                    break;
-                }
-            };
-
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
-
-            // --- Agent B responds ---
-            state.phase = Phase::AgentBResponding;
-            state.log(&if state.is_en() {
-                format!(
-                    "R{round} E{exchange}: Agent B ({}) responding",
-                    agent_b.name
-                )
-            } else {
-                format!(
-                    "第{round}轮 讨论{exchange}: Agent B ({}) 开始回应",
-                    agent_b.name
-                )
-            });
-            let _ = state_tx.send(state.clone());
-
-            let b_prompt = build_agent_b_prompt(exchange_kind, &conv_filename, state.is_en());
-
-            let b_label = if state.is_en() {
-                format!(
-                    "Round {round} Exchange {exchange}: Agent B ({})",
-                    agent_b.name
-                )
-            } else {
-                format!("第{round}轮 讨论{exchange}: Agent B ({})", agent_b.name)
-            };
-            let last_b_response = match run_agent_with_heartbeat(
                 &agent_b,
-                &b_prompt,
-                &project_path,
-                &b_label,
+                &conversation,
                 &mut state,
                 &state_tx,
+                &mut cmd_rx,
             )
-            .await
+            .await?
             {
-                Ok(output) => {
-                    let response = output.content;
-                    conversation.append_agent_entry(
-                        &agent_b.name,
-                        if state.is_en() { "Response" } else { "回应" },
-                        &response,
-                    )?;
-                    state.log(&if state.is_en() {
-                        format!(
-                            "R{round} E{exchange}: Agent B done ({:.0}s)",
-                            output.duration.as_secs_f64()
-                        )
-                    } else {
-                        format!(
-                            "第{round}轮 讨论{exchange}: Agent B 完成 ({:.0}秒)",
-                            output.duration.as_secs_f64()
-                        )
-                    });
-                    response
-                }
-                Err(e) => {
-                    if state.is_en() {
-                        error!("Round {round} Exchange {exchange} Agent B failed: {e}");
-                    } else {
-                        error!("第{round}轮 讨论{exchange} Agent B 失败: {e}");
-                    }
-                    state.log(&if state.is_en() {
-                        format!("R{round} E{exchange}: Agent B failed: {e}")
-                    } else {
-                        format!("第{round}轮 讨论{exchange}: Agent B 失败: {e}")
-                    });
-                    let _ = state_tx.send(state.clone());
-                    execution_error = Some(anyhow::anyhow!(if state.is_en() {
-                        format!("Round {round} Exchange {exchange}: Agent B execution failed: {e}")
-                    } else {
-                        format!("第{round}轮 讨论{exchange}: Agent B 执行失败: {e}")
-                    }));
+                ExchangeOutcome::Continue => {}
+                ExchangeOutcome::ConsensusReached => {
+                    consensus_reached = true;
                     break;
                 }
-            };
-
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
-
-            // --- Check consensus ---
-            state.phase = Phase::CheckConsensus;
-            let _ = state_tx.send(state.clone());
-
-            // Consensus rules:
-            // 1. Last exchange (exchange == max_exchanges, including max=1):
-            //    Only check B. Full OR partial agreement → apply agreed fixes.
-            //    This is the "last chance" — apply everything both sides accepted.
-            // 2. Exchange 1, not the last (max_exchanges > 1):
-            //    Only check B, but only FULL agreement counts.
-            //    Partial agree → keep discussing (can do better).
-            // 3. Exchange 2+ and not the last:
-            //    Both A and B must express agreement (full or partial).
-            let is_last = exchange == config.review.max_exchanges;
-            let result = if is_last {
-                consensus::check_b_only(&last_b_response, &config.review.consensus_keywords)
-            } else if exchange == 1 {
-                consensus::check_b_full_only(&last_b_response, &config.review.consensus_keywords)
-            } else {
-                consensus::check_consensus(
-                    &last_a_response,
-                    &last_b_response,
-                    &config.review.consensus_keywords,
-                )
-            };
-
-            if result.reached {
-                state.log(&if state.is_en() {
-                    format!("R{round} E{exchange}: consensus reached")
-                } else {
-                    format!("第{round}轮 讨论{exchange}: 达成共识")
-                });
-                let summary = if state.is_en() {
-                    "Both agents explicitly expressed consensus via the configured keywords."
-                        .to_string()
-                } else {
-                    result.summary.clone()
-                };
-                conversation.append_consensus_with_language(&summary, state.is_en())?;
-                consensus_reached = true;
-                break;
+                ExchangeOutcome::ShutdownRequested => {
+                    expose_branch_info(&mut state, &review_branch, &original_branch);
+                    finalize_session_state(&mut state, &conversation, &state_tx);
+                    return Ok(());
+                }
+                ExchangeOutcome::ExecutionError(err) => {
+                    execution_error = Some(err);
+                    break;
+                }
             }
-
-            state.log(&if state.is_en() {
-                format!("R{round} E{exchange}: no consensus, continuing...")
-            } else {
-                format!("第{round}轮 讨论{exchange}: 未达成共识，继续讨论...")
-            });
-            let _ = state_tx.send(state.clone());
         }
 
         state.round_durations.push(round_start.elapsed());
@@ -1000,17 +1344,17 @@ pub async fn run(
             // This round failed to reach consensus
             state.phase = Phase::Done;
             state.finished = true;
-            state.log(&if state.is_en() {
+            state.log(&i18n!(
+                state,
                 format!(
                     "Round {round}: no consensus after {} exchanges, review ended",
                     config.review.max_exchanges
-                )
-            } else {
+                ),
                 format!(
                     "第{round}轮: {}次讨论后仍未达成共识，审查结束",
                     config.review.max_exchanges
                 )
-            });
+            ));
             expose_branch_info(&mut state, &review_branch, &original_branch);
             finalize_session_state(&mut state, &conversation, &state_tx);
             if state.is_en() {
@@ -1022,302 +1366,73 @@ pub async fn run(
         }
 
         // === Consensus reached — apply changes ===
-        if no_apply {
-            state.log(&if state.is_en() {
-                format!("Round {round}: skipping apply (--no-apply)")
-            } else {
-                format!("第{round}轮: 跳过代码修改 (--no-apply)")
-            });
-            let _ = state_tx.send(state.clone());
-        } else {
-            if !auto_apply {
-                // Manual apply mode: wait for user confirmation
-                state.phase = Phase::WaitingForApply;
-                state.log(&if state.is_en() {
-                    format!("Round {round}: waiting for apply confirmation...")
-                } else {
-                    format!("第{round}轮: 等待用户确认执行修改...")
-                });
-                let _ = state_tx.send(state.clone());
-
-                let mut shutdown_requested = false;
-                let confirmed = if let Some(ref mut rx) = cmd_rx {
-                    loop {
-                        match rx.recv().await {
-                            Some(OrchestratorCommand::ConfirmApply) => break true,
-                            Some(OrchestratorCommand::Shutdown) => {
-                                shutdown_requested = true;
-                                break false;
-                            }
-                            Some(_) => {} // ignore other commands
-                            None => break true,
-                        }
-                    }
-                } else {
-                    true // no channel means auto
-                };
-
-                if shutdown_requested {
-                    state.log(if state.is_en() {
-                        "Shutdown received, ending session"
-                    } else {
-                        "收到停止信号，提前结束本次会话"
-                    });
-                    expose_branch_info(&mut state, &review_branch, &original_branch);
-                    finalize_session_state(&mut state, &conversation, &state_tx);
-                    return Ok(());
-                }
-
-                if !confirmed {
-                    previous_round_code_modified = false;
-                    state.log(&if state.is_en() {
-                        format!("Round {round}: user cancelled apply")
-                    } else {
-                        format!("第{round}轮: 用户取消修改")
-                    });
-                    let _ = state_tx.send(state.clone());
-                    // Skip to next round or finish
-                    if round == config.review.max_rounds {
-                        state.log(&if state.is_en() {
-                            format!("All {} rounds completed", config.review.max_rounds)
-                        } else {
-                            format!("已完成全部{}轮审查", config.review.max_rounds)
-                        });
-                    } else {
-                        state.log(&if state.is_en() {
-                            format!("Round {round} done, next round...")
-                        } else {
-                            format!("第{round}轮完成，进入下一轮...")
-                        });
-                        let _ = state_tx.send(state.clone());
-                    }
-                    continue;
-                }
-
-                state.log(&if state.is_en() {
-                    format!("Round {round}: user confirmed, applying...")
-                } else {
-                    format!("第{round}轮: 用户已确认，开始修改...")
-                });
+        let apply_outcome = match run_apply_phase(
+            round,
+            no_apply,
+            auto_apply,
+            apply_level,
+            &conv_filename,
+            &project_path,
+            &agent_b,
+            &conversation,
+            &mut state,
+            &state_tx,
+            &mut cmd_rx,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                expose_branch_info(&mut state, &review_branch, &original_branch);
+                finalize_session_state(&mut state, &conversation, &state_tx);
+                return Err(err);
             }
+        };
 
-            if consume_shutdown_command(&mut cmd_rx, &mut state, &state_tx) {
+        let code_modified_in_round = match apply_outcome {
+            ApplyPhaseOutcome::Applied => true,
+            ApplyPhaseOutcome::Skipped => false,
+            ApplyPhaseOutcome::ShutdownRequested => {
                 expose_branch_info(&mut state, &review_branch, &original_branch);
                 finalize_session_state(&mut state, &conversation, &state_tx);
                 return Ok(());
             }
-
-            state.phase = Phase::ApplyChanges;
-            state.log(&if state.is_en() {
-                format!("Round {round}: Agent B applying changes...")
-            } else {
-                format!("第{round}轮: Agent B 开始根据共识修改代码...")
-            });
-            let _ = state_tx.send(state.clone());
-
-            let apply_prompt = build_apply_prompt(&conv_filename, apply_level, state.is_en());
-
-            let apply_label = if state.is_en() {
-                format!("Round {round} Code Changes: Agent B ({})", agent_b.name)
-            } else {
-                format!("第{round}轮 代码修改: Agent B ({})", agent_b.name)
-            };
-            match run_agent_with_heartbeat(
-                &agent_b,
-                &apply_prompt,
-                &project_path,
-                &apply_label,
-                &mut state,
-                &state_tx,
-            )
-            .await
-            {
-                Ok(output) => {
-                    code_modified_in_round = true;
-                    conversation.append_agent_entry(
-                        &agent_b.name,
-                        if state.is_en() {
-                            "Code Changes"
-                        } else {
-                            "代码修改"
-                        },
-                        &output.content,
-                    )?;
-                    if let Err(e) = crate::conversation::append_changelog_with_language(
-                        &project_path,
-                        round,
-                        &output.content,
-                        state.is_en(),
-                    ) {
-                        state.log(&if state.is_en() {
-                            format!("Failed to write review_changelog.md: {e}")
-                        } else {
-                            format!("写入 review_changelog.md 失败: {e}")
-                        });
-                        expose_branch_info(&mut state, &review_branch, &original_branch);
-                        finalize_session_state(&mut state, &conversation, &state_tx);
-                        return Err(anyhow::anyhow!(if state.is_en() {
-                            format!("Round {round}: failed to write review_changelog.md: {e}")
-                        } else {
-                            format!("第{round}轮: 写入 review_changelog.md 失败: {e}")
-                        }));
-                    }
-                    state.log(if state.is_en() {
-                        "review_changelog.md updated"
-                    } else {
-                        "review_changelog.md 已更新"
-                    });
-                    state.log(&if state.is_en() {
-                        format!(
-                            "Round {round}: Agent B apply done ({:.0}s)",
-                            output.duration.as_secs_f64()
-                        )
-                    } else {
-                        format!(
-                            "第{round}轮: Agent B 已完成代码修改 ({:.0}秒)",
-                            output.duration.as_secs_f64()
-                        )
-                    });
-                }
-                Err(e) => {
-                    state.log(&if state.is_en() {
-                        format!("Round {round}: Agent B apply failed: {e}")
-                    } else {
-                        format!("第{round}轮: Agent B 修改代码失败: {e}")
-                    });
-                    expose_branch_info(&mut state, &review_branch, &original_branch);
-                    finalize_session_state(&mut state, &conversation, &state_tx);
-                    return Err(anyhow::anyhow!(if state.is_en() {
-                        format!("Round {round}: Agent B apply failed: {e}")
-                    } else {
-                        format!("第{round}轮: Agent B 修改代码失败: {e}")
-                    }));
-                }
-            }
-
-            state.update_preview(&conversation);
-            let _ = state_tx.send(state.clone());
-        }
+        };
 
         previous_round_code_modified = code_modified_in_round;
 
         // Check if this was the last round
         if round == config.review.max_rounds {
-            state.log(&if state.is_en() {
-                format!("All {} rounds completed", config.review.max_rounds)
-            } else {
+            state.log(&i18n!(
+                state,
+                format!("All {} rounds completed", config.review.max_rounds),
                 format!("已完成全部{}轮审查", config.review.max_rounds)
-            });
+            ));
         } else {
-            state.log(&if state.is_en() {
-                format!("Round {round} done, next round...")
-            } else {
+            state.log(&i18n!(
+                state,
+                format!("Round {round} done, next round..."),
                 format!("第{round}轮完成，进入下一轮...")
-            });
+            ));
             let _ = state_tx.send(state.clone());
         }
     }
 
     // Branch mode: commit changes and optionally wait for merge decision.
-    if let (Some(rb), Some(ob)) = (&review_branch, &original_branch) {
-        // Always expose branch info so main.rs can print follow-up instructions.
-        state.review_branch = Some(rb.clone());
-        state.original_branch = Some(ob.clone());
-
-        let commit_outcome = match git_commit_filtered(
-            &project_path,
-            &format!("mdtalk: review changes on {rb}"),
-            &initial_dirty_paths,
-        )
-        .await
-        {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                state.log(&if state.is_en() {
-                    format!("Failed to commit changes: {e}")
-                } else {
-                    format!("提交更改失败: {e}")
-                });
-                finalize_session_state(&mut state, &conversation, &state_tx);
-                return Err(anyhow::anyhow!(if state.is_en() {
-                    format!("Branch mode: auto-commit failed: {e}")
-                } else {
-                    format!("分支模式: 自动提交失败: {e}")
-                }));
-            }
-        };
-
-        match commit_outcome {
-            GitCommitOutcome::Committed => {
-                state.log(&if state.is_en() {
-                    format!("Changes committed on branch {rb}")
-                } else {
-                    format!("更改已提交到分支 {rb}")
-                });
-
-                // Enter WaitingForMerge phase
-                state.phase = Phase::WaitingForMerge;
-                state.log(if state.is_en() {
-                    "Press Enter to merge, or q to keep branch and exit"
-                } else {
-                    "按 Enter 合并分支，或按 q 保留分支并退出"
-                });
-                state.update_preview(&conversation);
-                let _ = state_tx.send(state.clone());
-
-                // Wait for ConfirmMerge or Shutdown
-                let mut do_merge = false;
-                if let Some(ref mut rx) = cmd_rx {
-                    loop {
-                        match rx.recv().await {
-                            Some(OrchestratorCommand::ConfirmMerge) => {
-                                do_merge = true;
-                                break;
-                            }
-                            Some(OrchestratorCommand::Shutdown) => break,
-                            Some(_) => {} // ignore stale commands
-                            None => break,
-                        }
-                    }
-                }
-
-                if do_merge {
-                    state.log(if state.is_en() {
-                        "Merging..."
-                    } else {
-                        "正在合并..."
-                    });
-                    let _ = state_tx.send(state.clone());
-                    match git_checkout_and_merge(&project_path, ob, rb).await {
-                        Ok(()) => {
-                            state.log(&if state.is_en() {
-                                format!("Merged {rb} into {ob}")
-                            } else {
-                                format!("已将 {rb} 合并到 {ob}")
-                            });
-                            // Clear branch info since merge is done.
-                            state.review_branch = None;
-                            state.original_branch = None;
-                        }
-                        Err(e) => {
-                            state.log(&if state.is_en() {
-                                format!("Merge failed: {e}")
-                            } else {
-                                format!("合并失败: {e}")
-                            });
-                            // Keep branch info so user can merge manually.
-                        }
-                    }
-                }
-            }
-            GitCommitOutcome::NothingToCommit => {
-                state.log(if state.is_en() {
-                    "No file changes to commit on review branch"
-                } else {
-                    "审查分支无可提交的文件变更"
-                });
-            }
-        }
+    if let Err(err) = run_branch_finalization(
+        &project_path,
+        &review_branch,
+        &original_branch,
+        &initial_dirty_paths,
+        &mut cmd_rx,
+        &conversation,
+        &mut state,
+        &state_tx,
+    )
+    .await
+    {
+        finalize_session_state(&mut state, &conversation, &state_tx);
+        return Err(err);
     }
 
     finalize_session_state(&mut state, &conversation, &state_tx);
