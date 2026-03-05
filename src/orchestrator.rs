@@ -355,13 +355,16 @@ CRITICAL: Do NOT modify any source code files. Only review and report issues."
                 )
             }
             ExchangeKind::FollowUp => format!(
-                "You are participating in a multi-agent code review workflow. \
-First read the full conversation history in {conv_filename}.\n\n\
-Then respond to Agent B's latest verification results. For each item:\n\
-- If B agreed with your finding: briefly acknowledge\n\
-- If B disagreed or partially agreed: provide counter-evidence from the source code, or accept B's position\n\
-- Add any new issues you noticed\n\n\
-CRITICAL: Do NOT modify any source code files. Only discuss and verify.\n\n\
+                "You are Agent A in a multi-agent code review debate. \
+Read {conv_filename} and focus ONLY on Agent B's LAST response.\n\n\
+DO NOT summarize the conversation. DO NOT repeat previous points. \
+Respond DIRECTLY to each item in B's last response:\n\n\
+For each item B marked as [Agree]/[Disagree]/[Partially Agree]:\n\
+- If B disagreed: either provide counter-evidence from source code to defend your position, or concede\n\
+- If B partially agreed: address the specific concern B raised\n\
+- If B agreed: no need to repeat, just move on\n\
+- If B raised new issues: evaluate them against actual code\n\n\
+CRITICAL: Do NOT modify any source code files. Do NOT summarize history.\n\n\
 You MUST end your response with one of these exact conclusion lines:\n\
   If you fully agree with B's assessment: CONCLUSION: I agree\n\
   If you partially agree: CONCLUSION: partially agree\n\
@@ -396,13 +399,15 @@ You MUST end your response with one of these exact conclusion lines:\n\
             )
         }
         ExchangeKind::FollowUp => format!(
-            "你正在参与一个多 agent 代码审查流程。\
-请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
-然后针对 Agent B 的验证结果逐条回应：\n\
-- B 认可的条目：简要确认\n\
-- B 不认可或部分认可的条目：提供源代码中的反驳证据，或接受 B 的判断\n\
-- 补充你发现的新问题\n\n\
-严禁修改任何源代码文件！只进行讨论和验证。\n\n\
+            "你是 Agent A，正在进行多 agent 代码审查辩论。\
+请阅读 {conv_filename}，只关注 Agent B 的最后一条回复。\n\n\
+禁止总结对话历史！禁止重复已讨论过的内容！\
+直接针对 B 最后一条回复中的每一条逐项回应：\n\n\
+- B 标注【不同意】的条目：用源代码中的证据反驳，或接受 B 的判断\n\
+- B 标注【部分成立】的条目：针对 B 提出的具体顾虑进行回应\n\
+- B 标注【同意】的条目：无需重复，跳过即可\n\
+- B 提出的新问题：对照实际代码评估\n\n\
+严禁修改任何源代码文件！禁止总结历史！\n\n\
 你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
   完全同意 B 的评估：结论：同意\n\
   部分同意：结论：部分同意\n\
@@ -431,13 +436,15 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
                 Important: output the full review content directly; do not only report which files you read."
             ),
             ExchangeKind::FollowUp => format!(
-                "You are participating in a multi-agent code review workflow. \
-                First read the full conversation history in {conv_filename}.\n\n\
-                Then respond to Agent A's latest arguments. For each item:\n\
-                - If A provided convincing evidence: accept the finding\n\
-                - If you still disagree: explain why with code references\n\
-                - Note any new issues raised\n\n\
-                CRITICAL: Do NOT modify any source code files. Only discuss and verify.\n\n\
+                "You are Agent B in a multi-agent code review debate. \
+                Read {conv_filename} and focus ONLY on Agent A's LAST response.\n\n\
+                DO NOT summarize the conversation. DO NOT repeat previous points. \
+                Respond DIRECTLY to each item in A's last response:\n\n\
+                - If A defended a finding you disagreed with: evaluate A's new evidence against actual source code\n\
+                - If A conceded a point: acknowledge briefly\n\
+                - If A raised new issues: verify them against actual code\n\
+                - If you still disagree with A: explain why with specific code references\n\n\
+                CRITICAL: Do NOT modify any source code files. Do NOT summarize history.\n\n\
                 You MUST end your response with one of these exact conclusion lines:\n\
                   If you fully agree with A's position: CONCLUSION: I agree\n\
                   If you partially agree: CONCLUSION: partially agree\n\
@@ -463,13 +470,15 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
             重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
         ),
         ExchangeKind::FollowUp => format!(
-            "你正在参与一个多 agent 代码审查流程。\
-            请先阅读当前目录下的 {conv_filename} 文件，了解完整的审查对话历史。\n\n\
-            然后针对 Agent A 的最新论据逐条回应：\n\
-            - A 提供了有力证据的条目：接受该发现\n\
-            - 你仍然不同意的条目：用代码引用解释原因\n\
-            - 标注新提出的问题\n\n\
-            严禁修改任何源代码文件！只进行讨论和验证。\n\n\
+            "你是 Agent B，正在进行多 agent 代码审查辩论。\
+            请阅读 {conv_filename}，只关注 Agent A 的最后一条回复。\n\n\
+            禁止总结对话历史！禁止重复已讨论过的内容！\
+            直接针对 A 最后一条回复中的每一条逐项回应：\n\n\
+            - A 用新证据反驳了你之前的判断：对照源代码重新评估\n\
+            - A 接受了你的意见：简要确认即可\n\
+            - A 提出了新问题：对照实际代码验证\n\
+            - 你仍然不同意 A 的某条：用具体代码引用解释原因\n\n\
+            严禁修改任何源代码文件！禁止总结历史！\n\n\
             你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
               完全同意 A 的立场：结论：同意\n\
               部分同意：结论：部分同意\n\
@@ -1714,7 +1723,7 @@ mod tests {
     #[test]
     fn followup_agent_b_prompt_mentions_discussion_flow() {
         let prompt = build_agent_b_prompt(ExchangeKind::FollowUp, "conversation.md", true);
-        assert!(prompt.contains("respond to Agent A"));
+        assert!(prompt.contains("Agent A's LAST response"));
         assert!(!prompt.contains("Verify each finding"));
     }
 
