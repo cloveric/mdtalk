@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 
 use super::app::DashboardApp;
 use crate::orchestrator::Phase;
@@ -13,20 +15,34 @@ pub fn drain_buffered_events() {
     }
 }
 
-/// Poll for keyboard events with a timeout.
+/// Poll for keyboard and mouse events with a timeout.
 /// Returns `true` if there was an event to process.
 pub fn handle_events(app: &mut DashboardApp, timeout: Duration) -> Result<bool> {
     if event::poll(timeout)? {
-        if let Event::Key(key) = event::read()? {
-            // On Windows, crossterm sends Press, Repeat, and Release events.
-            // Only handle Press events to avoid double-processing.
-            if key.kind == KeyEventKind::Press {
-                handle_key(app, key);
+        match event::read()? {
+            Event::Key(key) => {
+                // On Windows, crossterm sends Press, Repeat, and Release events.
+                // Only handle Press events to avoid double-processing.
+                if key.kind == KeyEventKind::Press {
+                    handle_key(app, key);
+                }
             }
+            Event::Mouse(mouse) if !app.waiting_for_start => {
+                handle_mouse(app, mouse);
+            }
+            _ => {}
         }
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+fn handle_mouse(app: &mut DashboardApp, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => app.scroll_up_n(3),
+        MouseEventKind::ScrollDown => app.scroll_down_n(3),
+        _ => {}
     }
 }
 

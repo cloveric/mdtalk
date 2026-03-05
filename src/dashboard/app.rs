@@ -236,6 +236,8 @@ impl DashboardApp {
     }
 
     pub fn update_state(&mut self, new_state: OrchestratorState) {
+        let old_max = self.max_conversation_scroll_offset();
+        let was_at_bottom = self.scroll_offset >= old_max;
         self.state = new_state;
         self.start.language = self.state.language.clone();
         // Auto-scroll logs to bottom.
@@ -243,13 +245,22 @@ impl DashboardApp {
         if log_len > LOG_VISIBLE_LINES {
             self.log_scroll_offset = log_len - LOG_VISIBLE_LINES;
         }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(self.max_conversation_scroll_offset());
+        let new_max = self.max_conversation_scroll_offset();
+        if was_at_bottom {
+            // User was following the latest content — keep them at the bottom.
+            self.scroll_offset = new_max;
+        } else {
+            // User manually scrolled up — preserve their position.
+            self.scroll_offset = self.scroll_offset.min(new_max);
+        }
     }
 
     pub fn scroll_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
+    }
+
+    pub fn scroll_up_n(&mut self, n: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
 
     pub fn set_conversation_visible_lines(&mut self, visible_lines: u16) {
@@ -265,9 +276,12 @@ impl DashboardApp {
     }
 
     pub fn scroll_down(&mut self) {
-        if self.scroll_offset < self.max_conversation_scroll_offset() {
-            self.scroll_offset = self.scroll_offset.saturating_add(1);
-        }
+        self.scroll_down_n(1);
+    }
+
+    pub fn scroll_down_n(&mut self, n: u16) {
+        let max = self.max_conversation_scroll_offset();
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max);
     }
 
     pub fn quit(&mut self) {
