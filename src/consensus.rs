@@ -203,9 +203,12 @@ fn has_affirmative_keyword(text: &str, keyword: &str, require_unambiguous: bool)
 
 /// Extract the conclusion section from an agent's response.
 ///
-/// Looks for a "CONCLUSION:" or "结论：" line. If found, returns only that line
-/// and everything after it. Otherwise, returns the last ~500 characters as
-/// a best-effort fallback (the conclusion is always at the end of the response).
+/// Looks for a "CONCLUSION:" or "结论：" line. If found, returns that line and
+/// the immediately following paragraph (up to the first blank line). Stopping at
+/// the blank line prevents post-conclusion exec output (e.g. shell commands run
+/// by codex after printing its summary) from being included in consensus checks.
+///
+/// If no conclusion marker is found, falls back to the last trailing paragraph.
 fn extract_conclusion_section(response: &str) -> &str {
     // Look for explicit conclusion markers (case-insensitive search)
     let lower = response.to_lowercase();
@@ -213,7 +216,10 @@ fn extract_conclusion_section(response: &str) -> &str {
         if let Some(pos) = lower.rfind(marker) {
             // Find the start of the line containing the marker
             let line_start = response[..pos].rfind('\n').map_or(0, |p| p + 1);
-            return &response[line_start..];
+            let section = &response[line_start..];
+            // Stop at the first blank line to exclude post-conclusion exec output.
+            let end = section.find("\n\n").unwrap_or(section.len());
+            return &section[..end];
         }
     }
     // No conclusion marker found — use the trailing non-empty paragraph,
@@ -314,15 +320,26 @@ pub fn check_b_full_only(agent_b_response: &str, keywords: &[String]) -> Consens
     }
 }
 
-/// Check consensus for exchange 2+, where both agents have been debating
-/// and both must explicitly express agreement.
+/// Check consensus for exchange 2+, where both agents have been debating.
+/// Both must explicitly express FULL agreement — partial agreement is not enough
+/// here because there are still more exchanges available to reach full consensus.
+/// Partial keywords ("部分"/"partial") are filtered out of the keyword list.
 pub fn check_consensus(
     agent_a_response: &str,
     agent_b_response: &str,
     keywords: &[String],
 ) -> ConsensusResult {
-    let a_consensus = agent_shows_consensus(agent_a_response, keywords, true);
-    let b_consensus = agent_shows_consensus(agent_b_response, keywords, true);
+    let full_keywords: Vec<String> = keywords
+        .iter()
+        .filter(|kw| {
+            let lower = kw.to_lowercase();
+            !lower.contains("部分") && !lower.contains("partial")
+        })
+        .cloned()
+        .collect();
+
+    let a_consensus = agent_shows_consensus(agent_a_response, &full_keywords, true);
+    let b_consensus = agent_shows_consensus(agent_b_response, &full_keywords, true);
 
     if a_consensus && b_consensus {
         return ConsensusResult {
@@ -691,6 +708,17 @@ mod tests {
         let text = "Some review text without a conclusion marker. I agree.";
         let section = extract_conclusion_section(text);
         assert!(section.contains("I agree"));
+    }
+
+    #[test]
+    fn extract_conclusion_stops_before_blank_line_exec_output() {
+        // Codex often continues running exec commands after printing the conclusion line.
+        // The exec output (separated by a blank line) must not be included.
+        let text = "正文内容。\n\n结论：同意\n\n$ cat file.txt\n但是 this output has turning words but should be ignored.";
+        let section = extract_conclusion_section(text);
+        assert!(section.contains("结论：同意"));
+        assert!(!section.contains("but"), "exec output after blank line must be excluded");
+        assert!(!section.contains("正文"), "body before conclusion must be excluded");
     }
 
     #[test]

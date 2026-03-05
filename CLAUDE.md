@@ -113,8 +113,8 @@ mdtalk --demo
            A 回应 B 的意见（可能说服 B，也可能被 B 说服）
            B 再次回应 A
            → 共识检测（不是最后一次）：A 和 B 都需要写结论关键词
-             ✓ 双方都说"结论：同意"或"结论：部分同意" → 达成共识
-             ✗ 任一方说"结论：不同意" → 继续
+             ✓ 双方都说"结论：同意" → 达成共识
+             ✗ 任一方说"结论：部分同意"或"结论：不同意" → 继续
 
 最后一次讨论（exchange == max_exchanges，也包括 max_exchanges = 1 的情况）：
            → 共识检测：只看 B，全部同意或部分同意都算（用尽机会，应用已达成的部分）
@@ -128,7 +128,7 @@ mdtalk --demo
 |------|---------|
 | exchange 1，max_exchanges = 1（唯一一次） | 只看 B，全部同意或部分同意都算 |
 | exchange 1，max_exchanges > 1（还有机会） | 只看 B，仅全部同意才算；部分/不同意继续 |
-| exchange 2+ 非最后一次 | 看双方，A 和 B 都需写结论关键词（全/部分同意均可） |
+| exchange 2+ 非最后一次 | 看双方，A 和 B 都需写结论关键词，且仅全部同意才算；部分同意→继续 |
 | 最后一次（exchange == max_exchanges） | 只看 B，任何同意（全/部分）都算 |
 
 **三种共识结果**（通过 B 的结论行判断）：
@@ -154,7 +154,7 @@ mdtalk --demo
 │  │                                                                     │   │
 │  │  exchange 2:  A 回应 B 的核对结果，表达是否同意（需写"结论：同意"） │   │
 │  │               B 回应 A，表达是否同意（需写"结论：同意"）            │   │
-│  │               ── 检测共识（双方都写了关键词 → 达成！） ──  ✓       │   │
+│  │               ── 检测共识（双方均全部同意 → 达成！部分同意→继续） ── ✓  │   │
 │  │                                                                     │   │
 │  │  exchange 3+: 如未达成，继续对话直到第 N 次或达成共识              │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -306,9 +306,10 @@ refresh_rate_ms = 500
 
 ### 自检发现的问题（待修复）
 以下问题由 MDTalk 自检发现（claude+claude 14 条全部确认，codex+codex 7 条中 5 条成立）：
-- [ ] **[高]** apply 阶段 ~50 行重复代码（手动模式和自动模式）→ 提取 `run_apply_phase()` 函数
-- [ ] **[高]** 共识检测缺少转折词处理（"I agree, however..." 会被误判为共识）→ 增加 but/however/但是 检测
-- [ ] **[高]** Dashboard `enable_raw_mode()` 后 `execute!`/`Terminal::new` 失败时终端不恢复 → 用 RAII guard 包裹（codex 发现）
+- [x] **[高]** apply 阶段重复代码 → 已提取 `run_apply_phase()` 函数
+- [x] **[高]** 共识检测缺少转折词处理 → `ENGLISH_TURNING_TOKENS`/`CHINESE_TURNING_TOKENS` 已实现
+- [x] **[高]** Dashboard terminal restore → `mod.rs` 中已对所有失败路径做恢复处理
+- [x] **[高]** exec output 污染结论段 → `extract_conclusion_section` 现在在第一个空行处截断，排除 codex 在结论后继续运行的命令输出
 - [ ] **[中]** 超时默认值不一致（代码 `default_timeout()` 返回 600，文档和 toml 写 900）
 - [ ] **[中]** `RoundReReview` prompt 写死"代码已被修改"，但 `--no-apply`/取消/失败时代码未改（codex 发现）
 - [ ] **[中]** `last_a_response`/`last_b_response` 应用 `Option<String>` 替代空字符串 + `#[allow(unused_assignments)]`
