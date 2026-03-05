@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+#[cfg(not(windows))]
+use anyhow::Context;
+use anyhow::Result;
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -140,6 +142,8 @@ impl AgentRunner {
     async fn run_with_args(&self, args: Vec<String>, project_path: &Path) -> Result<AgentOutput> {
         let start = Instant::now();
 
+        #[cfg(windows)]
+        let fallback_args = args.clone();
         let (command_program, command_args) = self.spawn_command_with_platform_prefix(args);
 
         let mut cmd = Command::new(&command_program);
@@ -155,9 +159,48 @@ impl AgentRunner {
             cmd.process_group(0);
         }
 
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("Failed to spawn agent '{}'", self.name))?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(primary_err) => {
+                #[cfg(windows)]
+                {
+                    let (fallback_program, fallback_command_args) =
+                        self.spawn_command_with_windows_cmd_wrapper(fallback_args);
+                    warn!(
+                        agent = %self.name,
+                        command = %self.command,
+                        error = %primary_err,
+                        "Direct spawn failed on Windows; retrying via cmd /C wrapper"
+                    );
+
+                    let mut fallback_cmd = Command::new(&fallback_program);
+                    fallback_cmd
+                        .kill_on_drop(true)
+                        .args(&fallback_command_args)
+                        .current_dir(project_path)
+                        .env_remove("CLAUDECODE")
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped());
+
+                    match fallback_cmd.spawn() {
+                        Ok(child) => child,
+                        Err(fallback_err) => {
+                            anyhow::bail!(
+                                "Failed to spawn agent '{}' (direct: {}; cmd fallback: {})",
+                                self.name,
+                                primary_err,
+                                fallback_err
+                            );
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    return Err(primary_err)
+                        .with_context(|| format!("Failed to spawn agent '{}'", self.name));
+                }
+            }
+        };
 
         // Read stdout/stderr concurrently with wait to avoid deadlock
         // when pipe buffers fill up.
@@ -258,20 +301,20 @@ impl AgentRunner {
     }
 
     fn spawn_command_with_platform_prefix(&self, args: Vec<String>) -> (String, Vec<String>) {
-        if cfg!(windows) {
-            // On Windows, CLI tools installed via npm are often .cmd scripts that
-            // are more reliable when launched through cmd /C.
-            let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
-            full_args.extend(args);
-            ("cmd".to_string(), full_args)
-        } else {
-            (self.command_program.clone(), args)
-        }
+        // Prefer direct process execution to avoid shell interpretation of prompt text.
+        (self.command_program.clone(), args)
+    }
+
+    #[cfg(windows)]
+    fn spawn_command_with_windows_cmd_wrapper(&self, args: Vec<String>) -> (String, Vec<String>) {
+        let mut full_args = vec!["/C".to_string(), self.command_program.clone()];
+        full_args.extend(args);
+        ("cmd".to_string(), full_args)
     }
 }
 
 fn estimate_windows_command_line_length(command_program: &str, args: &[String]) -> usize {
-    let mut estimated = "cmd /C ".len() + command_program.len();
+    let mut estimated = command_program.len();
     for arg in args {
         estimated += 1; // separator
         estimated += estimate_windows_arg_length(arg);
@@ -457,5 +500,20 @@ mod tests {
             .validate_prompt_length(&prompt, &[prompt.clone()])
             .expect_err("overlong command line should be rejected on windows");
         assert!(err.to_string().contains("command line too long"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_spawn_prefers_direct_command_without_shell_wrapper() {
+        let runner = runner("codex");
+        let (program, args) = runner.spawn_command_with_platform_prefix(vec![
+            "exec".to_string(),
+            "hello & \"world\" %PATH%".to_string(),
+        ]);
+        assert_eq!(program, "codex");
+        assert_eq!(
+            args,
+            vec!["exec".to_string(), "hello & \"world\" %PATH%".to_string()]
+        );
     }
 }

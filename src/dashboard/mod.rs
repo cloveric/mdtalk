@@ -165,7 +165,7 @@ pub fn render_demo() -> Result<()> {
         language: "en".to_string(),
         round_durations: vec![Duration::from_secs(150)],
         session_start: Some(Instant::now() - Duration::from_secs(222)),
-        logs: vec![
+        logs: std::sync::Arc::new(vec![
             "[13:30:00] MDTalk 会话启动".to_string(),
             "[13:30:01] 第1轮: Agent A (claude) 开始审查".to_string(),
             "[13:32:31] 第1轮: Agent A 完成 (150秒)".to_string(),
@@ -175,7 +175,7 @@ pub fn render_demo() -> Result<()> {
             "[13:36:43] 第2轮: Agent A (claude) 开始审查".to_string(),
             "[13:38:10] 第2轮: Agent A 完成 (87秒)".to_string(),
             "[13:38:10] 第2轮: Agent B (codex) 开始回应".to_string(),
-        ],
+        ]),
         conversation_preview: std::sync::Arc::<str>::from(
             "\
 # Code Review: my-project

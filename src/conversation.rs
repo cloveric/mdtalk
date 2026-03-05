@@ -119,7 +119,7 @@ impl Conversation {
 
         // Read from file end until we have enough newline boundaries
         // to reconstruct the last `max_lines` lines.
-        while pos > 0 && newline_count <= max_lines {
+        while pos > 0 && newline_count < max_lines {
             let read_len = TAIL_READ_CHUNK_BYTES.min(pos as usize);
             pos -= read_len as u64;
             file.seek(SeekFrom::Start(pos))

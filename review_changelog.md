@@ -295,3 +295,54 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-05 08:35:11
+
+已按 `conversation.md` 的共识项完成修复，代码已直接修改：
+
+1. 修复 #7（Windows `cmd /C` 特殊字符风险）  
+默认改为“直接启动进程”，仅在 Windows 直接启动失败时回退 `cmd /C`，避免常规路径经过 shell 解析。  
+[agent.rs:142](/C:/Users/hangw/mdtalk/src/agent.rs:142)  
+[agent.rs:303](/C:/Users/hangw/mdtalk/src/agent.rs:303)  
+[agent.rs:309](/C:/Users/hangw/mdtalk/src/agent.rs:309)
+
+2. 修复 #4（`Option<String>` 不可达分支）  
+`run_exchange` 中 `last_a_response` / `last_b_response` 改为直接 `String`，删除不可达 `None` 分支。  
+[orchestrator.rs:733](/C:/Users/hangw/mdtalk/src/orchestrator.rs:733)  
+[orchestrator.rs:807](/C:/Users/hangw/mdtalk/src/orchestrator.rs:807)  
+[orchestrator.rs:880](/C:/Users/hangw/mdtalk/src/orchestrator.rs:880)
+
+3. 修复 #8（`read_tail_lines` 多读一个 chunk）  
+循环条件由 `<=` 改为 `<`。  
+[conversation.rs:122](/C:/Users/hangw/mdtalk/src/conversation.rs:122)
+
+4. 修复 #9（merge 失败后未 abort）  
+`git merge` 失败时自动执行 `git merge --abort`（并处理无进行中 merge 的情况）。  
+[orchestrator.rs:218](/C:/Users/hangw/mdtalk/src/orchestrator.rs:218)
+
+5. 修复 #12（`logs` 与 `conversation_preview` 结构不一致）  
+`logs` 改为 `Arc<Vec<String>>`，并用 `Arc::make_mut` 维护写时拷贝，降低 `state.clone()` 成本。  
+[orchestrator.rs:551](/C:/Users/hangw/mdtalk/src/orchestrator.rs:551)  
+[orchestrator.rs:1212](/C:/Users/hangw/mdtalk/src/orchestrator.rs:1212)  
+[dashboard/mod.rs:168](/C:/Users/hangw/mdtalk/src/dashboard/mod.rs:168)
+
+6. 修复 #13（测试脚本中文 `findstr` 编码风险）  
+`script_fail_on_apply_prompt` 改为“第 2 次调用失败”的 marker 机制，不再依赖中文匹配。  
+[orchestrator.rs:1649](/C:/Users/hangw/mdtalk/src/orchestrator.rs:1649)
+
+补充测试：
+- 新增 merge 冲突后自动 abort 的回归测试。  
+[orchestrator.rs:2003](/C:/Users/hangw/mdtalk/src/orchestrator.rs:2003)
+- 新增 `logs` Arc 共享/分离行为测试。  
+[orchestrator.rs:2080](/C:/Users/hangw/mdtalk/src/orchestrator.rs:2080)
+- 新增 Windows 直启优先测试。  
+[agent.rs:507](/C:/Users/hangw/mdtalk/src/agent.rs:507)
+
+验证结果：
+- 已执行 `cargo test`
+- 结果：`84 passed, 0 failed`
+
+如果你要，我可以继续直接帮你整理成一条 commit（含中英文 commit message 备选）。
+
+
+---
+

@@ -241,10 +241,29 @@ async fn git_checkout_and_merge(
         .output()
         .await?;
     if !output.status.success() {
-        anyhow::bail!(
-            "git merge {merge_branch} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let merge_err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let abort_output = TokioCommand::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(project_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await?;
+        if !abort_output.status.success() {
+            let abort_err = String::from_utf8_lossy(&abort_output.stderr)
+                .trim()
+                .to_string();
+            let lower = abort_err.to_ascii_lowercase();
+            let no_merge_in_progress = lower.contains("no merge to abort")
+                || lower.contains("there is no merge to abort")
+                || lower.contains("merge_head missing");
+            if !no_merge_in_progress {
+                anyhow::bail!(
+                    "git merge {merge_branch} failed: {merge_err}; git merge --abort failed: {abort_err}"
+                );
+            }
+        }
+        anyhow::bail!("git merge {merge_branch} failed: {}", merge_err);
     }
     Ok(())
 }
@@ -529,7 +548,7 @@ pub struct OrchestratorState {
     pub agent_b_timeout_secs: u64,
     pub round_durations: Vec<std::time::Duration>,
     pub session_start: Option<Instant>,
-    pub logs: Vec<String>,
+    pub logs: Arc<Vec<String>>,
     pub conversation_preview: Arc<str>,
     pub finished: bool,
     pub error_message: Option<String>,
@@ -737,7 +756,7 @@ async fn run_exchange(
                     output.duration.as_secs_f64()
                 )
             ));
-            Some(response)
+            response
         }
         Err(e) => {
             if state.is_en() {
@@ -814,7 +833,7 @@ async fn run_exchange(
                     output.duration.as_secs_f64()
                 )
             ));
-            Some(response)
+            response
         }
         Err(e) => {
             if state.is_en() {
@@ -858,23 +877,11 @@ async fn run_exchange(
             summary: String::new(),
         }
     } else if is_last {
-        let Some(last_b_response) = last_b_response.as_deref() else {
-            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
-                "internal error: missing Agent B response at consensus stage"
-            )));
-        };
-        consensus::check_b_only(last_b_response, &config.review.consensus_keywords)
+        consensus::check_b_only(&last_b_response, &config.review.consensus_keywords)
     } else {
-        let (Some(last_a_response), Some(last_b_response)) =
-            (last_a_response.as_deref(), last_b_response.as_deref())
-        else {
-            return Ok(ExchangeOutcome::ExecutionError(anyhow::anyhow!(
-                "internal error: missing exchange response at consensus stage"
-            )));
-        };
         consensus::check_consensus(
-            last_a_response,
-            last_b_response,
+            &last_a_response,
+            &last_b_response,
             &config.review.consensus_keywords,
         )
     };
@@ -1186,7 +1193,7 @@ impl OrchestratorState {
             agent_b_timeout_secs: config.agent_b.timeout_secs,
             round_durations: Vec::new(),
             session_start: None,
-            logs: Vec::new(),
+            logs: Arc::new(Vec::new()),
             conversation_preview: Arc::<str>::from(""),
             finished: false,
             error_message: None,
@@ -1202,10 +1209,11 @@ impl OrchestratorState {
 
     fn log(&mut self, msg: &str) {
         let now = chrono::Local::now().format("%H:%M:%S");
-        self.logs.push(format!("[{now}] {msg}"));
-        if self.logs.len() > MAX_LOG_LINES {
-            let to_drop = self.logs.len() - MAX_LOG_LINES;
-            self.logs.drain(0..to_drop);
+        let logs = Arc::make_mut(&mut self.logs);
+        logs.push(format!("[{now}] {msg}"));
+        if logs.len() > MAX_LOG_LINES {
+            let to_drop = logs.len() - MAX_LOG_LINES;
+            logs.drain(0..to_drop);
         }
     }
 
@@ -1504,13 +1512,14 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command as StdCommand;
+    use std::sync::Arc;
 
     use tokio::sync::watch;
 
     use super::{
         ExchangeKind, OrchestratorState, Phase, build_agent_a_prompt, build_agent_b_prompt,
-        build_apply_prompt, classify_exchange, decode_git_status_path, git_commit_filtered, run,
-        should_append_round_header,
+        build_apply_prompt, classify_exchange, decode_git_status_path, git_checkout_and_merge,
+        git_commit_filtered, run, should_append_round_header,
     };
     use crate::config::{
         AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig, StartConfig,
@@ -1640,19 +1649,17 @@ mod tests {
     fn script_fail_on_apply_prompt(dir: &Path, name: &str) -> String {
         #[cfg(windows)]
         {
-            write_script(
-                dir,
-                name,
-                "set \"PROMPT=%~1\"\r\necho %PROMPT% | findstr /C:\"根据讨论中达成一致的改进意见\" /C:\"Consensus has been reached.\" >nul\r\nif %errorlevel%==0 (\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\necho I agree\r\nexit /b 0",
-            )
+            let body = format!(
+                "set \"MARKER=%~dp0{name}.marker\"\r\nif exist \"%MARKER%\" (\r\n  del \"%MARKER%\" >nul 2>&1\r\n  echo apply failed 1>&2\r\n  exit /b 1\r\n)\r\ntype nul > \"%MARKER%\"\r\necho I agree\r\nexit /b 0"
+            );
+            write_script(dir, name, &body)
         }
         #[cfg(unix)]
         {
-            write_script(
-                dir,
-                name,
-                "if printf '%s\\n' \"$1\" | grep -Fq \"根据讨论中达成一致的改进意见\" || printf '%s\\n' \"$1\" | grep -Fq \"Consensus has been reached.\"; then\n  echo \"apply failed\" >&2\n  exit 1\nfi\necho \"I agree\"\nexit 0",
-            )
+            let body = format!(
+                "MARKER=\"$(dirname \"$0\")/{name}.marker\"\nif [ -f \"$MARKER\" ]; then\n  rm -f \"$MARKER\"\n  echo \"apply failed\" >&2\n  exit 1\nfi\n: > \"$MARKER\"\necho \"I agree\"\nexit 0"
+            );
+            write_script(dir, name, &body)
         }
     }
 
@@ -1992,6 +1999,55 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn git_checkout_and_merge_aborts_conflict_state() {
+        let temp_dir = TestTempDir::new("orchestrator", "merge-abort-on-conflict");
+        let project_dir = temp_dir.path().to_path_buf();
+        git_must_succeed(&project_dir, &["init"]);
+        git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
+        git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
+
+        let tracked = project_dir.join("conflict.txt");
+        fs::write(&tracked, "base\n").expect("failed to write base file");
+        git_must_succeed(&project_dir, &["add", "conflict.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base"]);
+
+        let branch_output = StdCommand::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to read current branch");
+        assert!(
+            branch_output.status.success(),
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&branch_output.stderr)
+        );
+        let base_branch = String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string();
+        assert!(!base_branch.is_empty(), "base branch should not be empty");
+
+        git_must_succeed(&project_dir, &["checkout", "-b", "feature"]);
+        fs::write(&tracked, "feature\n").expect("failed to write feature content");
+        git_must_succeed(&project_dir, &["add", "conflict.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "feature-change"]);
+
+        git_must_succeed(&project_dir, &["checkout", &base_branch]);
+        fs::write(&tracked, "base-branch\n").expect("failed to write base-branch content");
+        git_must_succeed(&project_dir, &["add", "conflict.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base-change"]);
+
+        let err = git_checkout_and_merge(&project_dir, &base_branch, "feature")
+            .await
+            .expect_err("merge conflict should return an error");
+        assert!(err.to_string().contains("git merge feature failed"));
+
+        assert!(
+            !project_dir.join(".git").join("MERGE_HEAD").exists(),
+            "merge conflict should be aborted automatically to clear MERGE_HEAD"
+        );
+    }
+
     #[test]
     fn state_logs_are_bounded() {
         let temp_dir = TestTempDir::new("orchestrator", "state-log-cap");
@@ -2017,6 +2073,30 @@ mod tests {
                 .last()
                 .is_some_and(|line| line.contains("log line 399")),
             "latest logs should be kept"
+        );
+    }
+
+    #[test]
+    fn state_clone_reuses_log_buffer_until_mutation() {
+        let temp_dir = TestTempDir::new("orchestrator", "state-log-arc");
+        let project_dir = temp_dir.path().to_path_buf();
+        let cfg = test_config(
+            project_dir.clone(),
+            "agent_a_cmd".to_string(),
+            "agent_b_cmd".to_string(),
+        );
+        let mut state = OrchestratorState::new(&cfg);
+        state.log("line 1");
+        let mut cloned = state.clone();
+        assert!(
+            Arc::ptr_eq(&state.logs, &cloned.logs),
+            "state clone should share log allocation via Arc"
+        );
+
+        cloned.log("line 2");
+        assert!(
+            !Arc::ptr_eq(&state.logs, &cloned.logs),
+            "mutating one clone should detach log allocation"
         );
     }
 
