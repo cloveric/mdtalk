@@ -14,7 +14,7 @@ timeout_secs = 900
 [review]
 max_rounds = 1
 max_exchanges = 1
-consensus_keywords = ["agree", "consensus", "达成一致", "同意", "LGTM", "looks good", "no further"]
+# consensus_keywords not set — uses built-in defaults (includes 成立/部分成立/agree/LGTM etc.)
 output_file = "conversation.md"
 
 [dashboard]
