@@ -49,6 +49,40 @@ async fn git_checkout_new_branch(project_path: &Path, branch_name: &str) -> Resu
     Ok(())
 }
 
+async fn git_checkout_branch(project_path: &Path, branch_name: &str) -> Result<()> {
+    let output = TokioCommand::new("git")
+        .args(["checkout", branch_name])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git checkout {branch_name} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+async fn git_delete_branch(project_path: &Path, branch_name: &str) -> Result<()> {
+    let output = TokioCommand::new("git")
+        .args(["branch", "-D", branch_name])
+        .current_dir(project_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git branch -D {branch_name} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// Collect changed paths from git status, including untracked files.
 async fn git_status_paths(project_path: &Path) -> Result<HashSet<String>> {
     let output = TokioCommand::new("git")
@@ -421,34 +455,34 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
         return match exchange_kind {
             ExchangeKind::InitialReview | ExchangeKind::RoundReReview => format!(
                 "You are an independent code review expert. Verify each finding recorded in '{conv_filename}'.\n\n\
-                Steps:\n\
-                1. Read '{conv_filename}' and list all findings from the other reviewer\n\
-                2. Open the related source files and verify each finding against actual code\n\
-                3. Output your complete review response directly in this format:\n\
-                   - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
-                   - Add any missed issues\n\
-                   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
-                     Full agreement: write exactly → CONCLUSION: I agree\n\
-                     Partial agreement: write exactly → CONCLUSION: partially agree\n\
-                     Disagree: write exactly → CONCLUSION: I disagree\n\n\
-                CRITICAL: Do NOT modify any source code files. Your role is to verify and discuss only. \
-                Code changes will be applied in a separate phase after consensus is reached.\n\n\
-                Important: output the full review content directly; do not only report which files you read."
+Steps:\n\
+1. Read '{conv_filename}' and list all findings from the other reviewer\n\
+2. Open the related source files and verify each finding against actual code\n\
+3. Output your complete review response directly in this format:\n\
+   - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
+   - Add any missed issues\n\
+   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
+     Full agreement: write exactly → CONCLUSION: I agree\n\
+     Partial agreement: write exactly → CONCLUSION: partially agree\n\
+     Disagree: write exactly → CONCLUSION: I disagree\n\n\
+CRITICAL: Do NOT modify any source code files. Your role is to verify and discuss only. \
+Code changes will be applied in a separate phase after consensus is reached.\n\n\
+Important: output the full review content directly; do not only report which files you read."
             ),
             ExchangeKind::FollowUp => format!(
                 "You are Agent B in a multi-agent code review debate. \
-                Read {conv_filename} and focus ONLY on Agent A's LAST response.\n\n\
-                DO NOT summarize the conversation. DO NOT repeat previous points. \
-                Respond DIRECTLY to each item in A's last response:\n\n\
-                - If A defended a finding you disagreed with: evaluate A's new evidence against actual source code\n\
-                - If A conceded a point: acknowledge briefly\n\
-                - If A raised new issues: verify them against actual code\n\
-                - If you still disagree with A: explain why with specific code references\n\n\
-                CRITICAL: Do NOT modify any source code files. Do NOT summarize history.\n\n\
-                You MUST end your response with one of these exact conclusion lines:\n\
-                  If you fully agree with A's position: CONCLUSION: I agree\n\
-                  If you partially agree: CONCLUSION: partially agree\n\
-                  If you disagree: CONCLUSION: I disagree"
+Read {conv_filename} and focus ONLY on Agent A's LAST response.\n\n\
+DO NOT summarize the conversation. DO NOT repeat previous points. \
+Respond DIRECTLY to each item in A's last response:\n\n\
+- If A defended a finding you disagreed with: evaluate A's new evidence against actual source code\n\
+- If A conceded a point: acknowledge briefly\n\
+- If A raised new issues: verify them against actual code\n\
+- If you still disagree with A: explain why with specific code references\n\n\
+CRITICAL: Do NOT modify any source code files. Do NOT summarize history.\n\n\
+You MUST end your response with one of these exact conclusion lines:\n\
+  If you fully agree with A's position: CONCLUSION: I agree\n\
+  If you partially agree: CONCLUSION: partially agree\n\
+  If you disagree: CONCLUSION: I disagree"
             ),
         };
     }
@@ -456,33 +490,33 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
     match exchange_kind {
         ExchangeKind::InitialReview | ExchangeKind::RoundReReview => format!(
             "你是一位独立的代码审查专家。你的任务是对 '{conv_filename}' 中记录的代码审查意见进行逐条验证。\n\n\
-            具体步骤：\n\
-            1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
-            2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
-            3. 直接输出你的完整审查回应，格式如下：\n\
-               - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
-               - 补充任何审查者遗漏的新问题\n\
-               - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
-                 完全认可：写 → 结论：同意\n\
-                 部分认可：写 → 结论：部分同意\n\
-                 存在重大分歧：写 → 结论：不同意\n\n\
-            严禁修改任何源代码文件！你的职责仅限于验证和讨论。代码修改将在达成共识后的专门阶段执行。\n\n\
-            重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
+具体步骤：\n\
+1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
+2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
+3. 直接输出你的完整审查回应，格式如下：\n\
+   - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
+   - 补充任何审查者遗漏的新问题\n\
+   - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
+     完全认可：写 → 结论：同意\n\
+     部分认可：写 → 结论：部分同意\n\
+     存在重大分歧：写 → 结论：不同意\n\n\
+严禁修改任何源代码文件！你的职责仅限于验证和讨论。代码修改将在达成共识后的专门阶段执行。\n\n\
+重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
         ),
         ExchangeKind::FollowUp => format!(
             "你是 Agent B，正在进行多 agent 代码审查辩论。\
-            请阅读 {conv_filename}，只关注 Agent A 的最后一条回复。\n\n\
-            禁止总结对话历史！禁止重复已讨论过的内容！\
-            直接针对 A 最后一条回复中的每一条逐项回应：\n\n\
-            - A 用新证据反驳了你之前的判断：对照源代码重新评估\n\
-            - A 接受了你的意见：简要确认即可\n\
-            - A 提出了新问题：对照实际代码验证\n\
-            - 你仍然不同意 A 的某条：用具体代码引用解释原因\n\n\
-            严禁修改任何源代码文件！禁止总结历史！\n\n\
-            你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
-              完全同意 A 的立场：结论：同意\n\
-              部分同意：结论：部分同意\n\
-              存在分歧：结论：不同意"
+请阅读 {conv_filename}，只关注 Agent A 的最后一条回复。\n\n\
+禁止总结对话历史！禁止重复已讨论过的内容！\
+直接针对 A 最后一条回复中的每一条逐项回应：\n\n\
+- A 用新证据反驳了你之前的判断：对照源代码重新评估\n\
+- A 接受了你的意见：简要确认即可\n\
+- A 提出了新问题：对照实际代码验证\n\
+- 你仍然不同意 A 的某条：用具体代码引用解释原因\n\n\
+严禁修改任何源代码文件！禁止总结历史！\n\n\
+你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
+  完全同意 A 的立场：结论：同意\n\
+  部分同意：结论：部分同意\n\
+  存在分歧：结论：不同意"
         ),
     }
 }
@@ -551,13 +585,14 @@ pub struct OrchestratorState {
     pub current_exchange: u32,
     pub max_exchanges: u32,
     pub no_apply: bool,
+    pub apply_level: u32,
     pub agent_a_name: String,
     pub agent_a_timeout_secs: u64,
     pub agent_b_name: String,
     pub agent_b_timeout_secs: u64,
     pub round_durations: Vec<std::time::Duration>,
     pub session_start: Option<Instant>,
-    pub logs: Arc<Vec<String>>,
+    pub logs: Vec<String>,
     pub conversation_preview: Arc<str>,
     pub finished: bool,
     pub error_message: Option<String>,
@@ -961,7 +996,10 @@ async fn run_apply_phase(
                         break false;
                     }
                     Some(_) => {}
-                    None => break true,
+                    None => {
+                        shutdown_requested = true;
+                        break false;
+                    }
                 }
             }
         } else {
@@ -1113,6 +1151,7 @@ async fn run_branch_finalization(
             format!("Failed to commit changes: {e}"),
             format!("提交更改失败: {e}")
         ));
+        let _ = state_tx.send(state.clone());
         anyhow::anyhow!(i18n!(
             state,
             format!("Branch mode: auto-commit failed: {e}"),
@@ -1196,13 +1235,14 @@ impl OrchestratorState {
             current_exchange: 0,
             max_exchanges: config.review.max_exchanges,
             no_apply: false,
+            apply_level: 1,
             agent_a_name: config.agent_a.name.clone(),
             agent_a_timeout_secs: config.agent_a.timeout_secs,
             agent_b_name: config.agent_b.name.clone(),
             agent_b_timeout_secs: config.agent_b.timeout_secs,
             round_durations: Vec::new(),
             session_start: None,
-            logs: Arc::new(Vec::new()),
+            logs: Vec::new(),
             conversation_preview: Arc::<str>::from(""),
             finished: false,
             error_message: None,
@@ -1218,11 +1258,10 @@ impl OrchestratorState {
 
     fn log(&mut self, msg: &str) {
         let now = chrono::Local::now().format("%H:%M:%S");
-        let logs = Arc::make_mut(&mut self.logs);
-        logs.push(format!("[{now}] {msg}"));
-        if logs.len() > MAX_LOG_LINES {
-            let to_drop = logs.len() - MAX_LOG_LINES;
-            logs.drain(0..to_drop);
+        self.logs.push(format!("[{now}] {msg}"));
+        if self.logs.len() > MAX_LOG_LINES {
+            let to_drop = self.logs.len() - MAX_LOG_LINES;
+            self.logs.drain(0..to_drop);
         }
     }
 
@@ -1270,6 +1309,7 @@ pub async fn run(
                 state = OrchestratorState::new(&config);
                 state.language = lang;
                 state.no_apply = no_apply;
+                state.apply_level = apply_level;
                 let _ = state_tx.send(state.clone());
             }
             Err(_) => {
@@ -1281,6 +1321,7 @@ pub async fn run(
 
     state.session_start = Some(Instant::now());
     state.no_apply = no_apply;
+    state.apply_level = apply_level;
     state.log(if state.is_en() {
         "MDTalk session started"
     } else {
@@ -1303,7 +1344,7 @@ pub async fn run(
     if branch_mode {
         match git_current_branch(&project_path).await {
             Some(branch) => {
-                original_branch = Some(branch);
+                original_branch = Some(branch.clone());
                 let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 let new_branch = format!("mdtalk/review-{ts}");
                 git_checkout_new_branch(&project_path, &new_branch).await?;
@@ -1313,7 +1354,49 @@ pub async fn run(
                 } else {
                     format!("分支模式: 已创建分支 {new_branch}")
                 });
-                initial_dirty_paths = git_status_paths(&project_path).await?;
+                match git_status_paths(&project_path).await {
+                    Ok(paths) => {
+                        initial_dirty_paths = paths;
+                    }
+                    Err(status_err) => {
+                        let rollback_result = async {
+                            git_checkout_branch(&project_path, &branch).await?;
+                            git_delete_branch(&project_path, &new_branch).await?;
+                            Ok::<(), anyhow::Error>(())
+                        }
+                        .await;
+                        match rollback_result {
+                            Ok(()) => {
+                                anyhow::bail!(
+                                    "{}",
+                                    if state.is_en() {
+                                        format!(
+                                            "Branch mode: failed to collect initial git status after creating review branch {new_branch}: {status_err}. Rolled back to {branch}."
+                                        )
+                                    } else {
+                                        format!(
+                                            "分支模式: 创建审查分支 {new_branch} 后获取初始 git 状态失败: {status_err}。已回滚到 {branch}。"
+                                        )
+                                    }
+                                );
+                            }
+                            Err(rollback_err) => {
+                                anyhow::bail!(
+                                    "{}",
+                                    if state.is_en() {
+                                        format!(
+                                            "Branch mode: failed to collect initial git status after creating review branch {new_branch}: {status_err}. Rollback also failed: {rollback_err}"
+                                        )
+                                    } else {
+                                        format!(
+                                            "分支模式: 创建审查分支 {new_branch} 后获取初始 git 状态失败: {status_err}。回滚也失败: {rollback_err}"
+                                        )
+                                    }
+                                );
+                            }
+                        }
+                    }
+                }
                 let _ = state_tx.send(state.clone());
             }
             None => {
@@ -1367,7 +1450,7 @@ pub async fn run(
 
         // === Inner loop: exchanges (A speaks + B speaks + consensus check) ===
         for exchange in 1..=config.review.max_exchanges {
-            match run_exchange(
+            let exchange_outcome = match run_exchange(
                 round,
                 exchange,
                 &config,
@@ -1381,8 +1464,16 @@ pub async fn run(
                 &state_tx,
                 &mut cmd_rx,
             )
-            .await?
+            .await
             {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    execution_error = Some(err);
+                    break;
+                }
+            };
+
+            match exchange_outcome {
                 ExchangeOutcome::Continue => {}
                 ExchangeOutcome::ConsensusReached => {
                     consensus_reached = true;
@@ -1521,18 +1612,18 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command as StdCommand;
-    use std::sync::Arc;
 
     use tokio::sync::watch;
 
     use super::{
         ExchangeKind, OrchestratorState, Phase, build_agent_a_prompt, build_agent_b_prompt,
         build_apply_prompt, classify_exchange, decode_git_status_path, git_checkout_and_merge,
-        git_commit_filtered, run, should_append_round_header,
+        git_commit_filtered, run, run_branch_finalization, should_append_round_header,
     };
     use crate::config::{
         AgentConfig, DashboardConfig, MdtalkConfig, ProjectConfig, ReviewConfig, StartConfig,
     };
+    use crate::conversation::Conversation;
     use crate::test_utils::TestTempDir;
 
     fn git_must_succeed(dir: &Path, args: &[&str]) {
@@ -1672,6 +1763,25 @@ mod tests {
         }
     }
 
+    fn script_break_conversation_file(dir: &Path, name: &str) -> String {
+        #[cfg(windows)]
+        {
+            write_script(
+                dir,
+                name,
+                "if exist conversation.md del /f /q conversation.md >nul 2>&1\r\nmkdir conversation.md >nul 2>&1\r\necho I agree\r\nexit /b 0",
+            )
+        }
+        #[cfg(unix)]
+        {
+            write_script(
+                dir,
+                name,
+                "rm -f conversation.md\nmkdir -p conversation.md\necho \"I agree\"\nexit 0",
+            )
+        }
+    }
+
     #[test]
     fn first_exchange_in_first_round_is_initial_review() {
         assert_eq!(classify_exchange(1, 1), ExchangeKind::InitialReview);
@@ -1728,6 +1838,32 @@ mod tests {
     }
 
     #[test]
+    fn english_agent_b_prompt_has_no_indented_step_prefix() {
+        let prompt = build_agent_b_prompt(ExchangeKind::InitialReview, "conversation.md", true);
+        assert!(
+            prompt.contains("\nSteps:\n"),
+            "english prompt should expose an unindented Steps header"
+        );
+        assert!(
+            !prompt.contains("\n                Steps:\n"),
+            "english prompt should not contain source indentation spaces in content"
+        );
+    }
+
+    #[test]
+    fn chinese_agent_b_prompt_has_no_indented_step_prefix() {
+        let prompt = build_agent_b_prompt(ExchangeKind::InitialReview, "conversation.md", false);
+        assert!(
+            prompt.contains("\n具体步骤：\n"),
+            "chinese prompt should expose an unindented 具体步骤 header"
+        );
+        assert!(
+            !prompt.contains("\n            具体步骤：\n"),
+            "chinese prompt should not contain source indentation spaces in content"
+        );
+    }
+
+    #[test]
     fn english_apply_prompt_is_localized() {
         let prompt = build_apply_prompt("conversation.md", 1, true);
         assert!(prompt.contains("Consensus has been reached"));
@@ -1780,6 +1916,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finalizes_session_error_state_when_conversation_write_fails_in_exchange() {
+        let temp_dir = TestTempDir::new("orchestrator", "conversation-write-fails");
+        let project_dir = temp_dir.path().to_path_buf();
+        let a_cmd = script_break_conversation_file(&project_dir, "agent_a_breaks_conversation");
+        let b_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir, a_cmd, b_cmd);
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
+
+        let result = run(cfg, state_tx, true, 1, None, None).await;
+        assert!(
+            result.is_err(),
+            "conversation append failure should surface as an error"
+        );
+
+        let final_state = state_rx.borrow().clone();
+        assert_eq!(final_state.phase, Phase::Done);
+        assert!(
+            final_state.error_message.is_some(),
+            "finalized state should expose the write failure to dashboard"
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_apply_confirmation_channel_does_not_auto_apply() {
+        let temp_dir = TestTempDir::new("orchestrator", "apply-channel-closed");
+        let project_dir = temp_dir.path().to_path_buf();
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_cmd = script_fail_on_apply_prompt(&project_dir, "agent_b_fail_on_apply");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_cmd.clone());
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let mut sc = start_config(a_ok_cmd, b_cmd, false, false);
+        sc.auto_apply = false;
+        start_tx.send(sc).expect("failed to send start config");
+
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(1);
+        drop(cmd_tx);
+
+        let result = run(cfg, state_tx, false, 1, Some(start_rx), Some(cmd_rx)).await;
+        assert!(
+            result.is_ok(),
+            "closed command channel should not be treated as apply confirmation"
+        );
+
+        let final_state = state_rx.borrow().clone();
+        assert_eq!(final_state.phase, Phase::Done);
+        assert!(
+            final_state.error_message.is_none(),
+            "channel close should end safely without apply failure"
+        );
+    }
+
+    #[tokio::test]
     async fn start_config_no_apply_skips_apply_phase() {
         let temp_dir = TestTempDir::new("orchestrator", "start-config-no-apply");
         let project_dir = temp_dir.path().to_path_buf();
@@ -1796,6 +1985,32 @@ mod tests {
         assert!(
             result.is_ok(),
             "start-screen no_apply should skip apply even when CLI no_apply=false, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_config_apply_level_is_reflected_in_state() {
+        let temp_dir = TestTempDir::new("orchestrator", "start-config-apply-level");
+        let project_dir = temp_dir.path().to_path_buf();
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir, a_ok_cmd.clone(), b_ok_cmd.clone());
+        let (state_tx, state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let mut sc = start_config(a_ok_cmd, b_ok_cmd, false, true);
+        sc.apply_level = 3;
+        start_tx.send(sc).expect("failed to send start config");
+
+        let result = run(cfg, state_tx, false, 1, Some(start_rx), None).await;
+        assert!(
+            result.is_ok(),
+            "run should succeed for apply-level snapshot"
+        );
+
+        let final_state = state_rx.borrow().clone();
+        assert_eq!(
+            final_state.apply_level, 3,
+            "orchestrator state should reflect apply level chosen on start screen"
         );
     }
 
@@ -1820,6 +2035,91 @@ mod tests {
         assert!(
             !project_dir.join("conversation.md").exists(),
             "Branch setup should run before creating conversation.md in branch mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn branch_mode_rolls_back_when_initial_status_snapshot_fails() {
+        let temp_dir = TestTempDir::new("orchestrator", "branch-mode-status-snapshot-fails");
+        let project_dir = temp_dir.path().to_path_buf();
+        git_must_succeed(&project_dir, &["init"]);
+        git_must_succeed(&project_dir, &["config", "user.email", "test@example.com"]);
+        git_must_succeed(&project_dir, &["config", "user.name", "MDTalk Test"]);
+        fs::write(project_dir.join("seed.txt"), "base\n").expect("failed to write seed file");
+        git_must_succeed(&project_dir, &["add", "seed.txt"]);
+        git_must_succeed(&project_dir, &["commit", "-m", "base"]);
+
+        let original_branch_output = StdCommand::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to read current branch");
+        assert!(
+            original_branch_output.status.success(),
+            "failed to read branch name: {}",
+            String::from_utf8_lossy(&original_branch_output.stderr)
+        );
+        let original_branch = String::from_utf8_lossy(&original_branch_output.stdout)
+            .trim()
+            .to_string();
+        assert!(
+            !original_branch.is_empty(),
+            "original branch should not be empty"
+        );
+
+        // Make `git status` fail while `git checkout -b` still succeeds.
+        git_must_succeed(
+            &project_dir,
+            &["config", "status.showUntrackedFiles", "invalid"],
+        );
+
+        let a_ok_cmd = script_always_agree(&project_dir, "agent_a_ok");
+        let b_ok_cmd = script_always_agree(&project_dir, "agent_b_ok");
+        let cfg = test_config(project_dir.clone(), a_ok_cmd.clone(), b_ok_cmd.clone());
+        let (state_tx, _state_rx) = watch::channel(OrchestratorState::new(&cfg));
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        start_tx
+            .send(start_config(a_ok_cmd, b_ok_cmd, true, false))
+            .expect("failed to send start config");
+
+        let result = run(cfg, state_tx, true, 1, Some(start_rx), None).await;
+        assert!(
+            result.is_err(),
+            "branch-mode setup should fail when initial git status snapshot fails"
+        );
+
+        let branch_output = StdCommand::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to read branch after run");
+        assert!(
+            branch_output.status.success(),
+            "failed to read branch after rollback: {}",
+            String::from_utf8_lossy(&branch_output.stderr)
+        );
+        let current_branch = String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string();
+        assert_eq!(
+            current_branch, original_branch,
+            "branch-mode setup failure should restore original branch"
+        );
+
+        let review_branches_output = StdCommand::new("git")
+            .args(["branch", "--list", "mdtalk/review-*"])
+            .current_dir(&project_dir)
+            .output()
+            .expect("failed to list review branches");
+        assert!(
+            review_branches_output.status.success(),
+            "failed to list review branches: {}",
+            String::from_utf8_lossy(&review_branches_output.stderr)
+        );
+        let review_branches = String::from_utf8_lossy(&review_branches_output.stdout);
+        assert!(
+            review_branches.trim().is_empty(),
+            "review branch should be deleted after setup rollback, got: {review_branches:?}"
         );
     }
 
@@ -2057,6 +2357,51 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn branch_finalization_commit_error_is_sent_to_dashboard_immediately() {
+        let temp_dir = TestTempDir::new("orchestrator", "branch-finalization-send-on-error");
+        let project_dir = temp_dir.path().to_path_buf();
+        let cfg = test_config(
+            project_dir.clone(),
+            "agent_a_cmd".to_string(),
+            "agent_b_cmd".to_string(),
+        );
+        let mut state = OrchestratorState::new(&cfg);
+        state.language = "en".to_string();
+        let (state_tx, state_rx) = watch::channel(state.clone());
+        let mut cmd_rx = None;
+        let conversation = Conversation::new(&project_dir, "conversation.md", "project");
+        conversation
+            .create_with_language(true)
+            .expect("failed to create conversation file");
+
+        let err = run_branch_finalization(
+            &project_dir,
+            &Some("mdtalk/review-test".to_string()),
+            &Some("main".to_string()),
+            &HashSet::new(),
+            &mut cmd_rx,
+            &conversation,
+            &mut state,
+            &state_tx,
+        )
+        .await
+        .expect_err("commit in non-git directory should fail");
+        assert!(
+            err.to_string().contains("auto-commit failed"),
+            "finalization failure should retain context"
+        );
+
+        let state_after = state_rx.borrow().clone();
+        assert!(
+            state_after
+                .logs
+                .iter()
+                .any(|line| line.contains("Failed to commit changes")),
+            "commit failure log should be sent before the caller handles the error"
+        );
+    }
+
     #[test]
     fn state_logs_are_bounded() {
         let temp_dir = TestTempDir::new("orchestrator", "state-log-cap");
@@ -2086,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn state_clone_reuses_log_buffer_until_mutation() {
+    fn state_clone_keeps_log_values_independent() {
         let temp_dir = TestTempDir::new("orchestrator", "state-log-arc");
         let project_dir = temp_dir.path().to_path_buf();
         let cfg = test_config(
@@ -2097,15 +2442,21 @@ mod tests {
         let mut state = OrchestratorState::new(&cfg);
         state.log("line 1");
         let mut cloned = state.clone();
-        assert!(
-            Arc::ptr_eq(&state.logs, &cloned.logs),
-            "state clone should share log allocation via Arc"
+        assert_eq!(state.logs.len(), 1, "original state should keep first log");
+        assert_eq!(
+            cloned.logs.len(),
+            1,
+            "cloned state should copy initial logs"
         );
 
         cloned.log("line 2");
         assert!(
-            !Arc::ptr_eq(&state.logs, &cloned.logs),
-            "mutating one clone should detach log allocation"
+            state.logs.iter().all(|line| !line.contains("line 2")),
+            "mutating cloned logs should not mutate the original state snapshot"
+        );
+        assert!(
+            cloned.logs.iter().any(|line| line.contains("line 2")),
+            "cloned state should accept further log writes"
         );
     }
 

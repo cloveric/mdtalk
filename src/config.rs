@@ -83,12 +83,8 @@ fn default_consensus_keywords() -> Vec<String> {
         "looks good".to_string(),
         "sounds good".to_string(),
         "LGTM".to_string(),
-        "confirmed".to_string(),
-        "accepted".to_string(),
         "acknowledged".to_string(),
         "approved".to_string(),
-        "correct".to_string(),
-        "valid".to_string(),
         "verified".to_string(),
         "concur".to_string(),
         // ── English: partial agreement ─────────────────────────────────────
@@ -412,5 +408,27 @@ consensus_keywords = ["agree"]
         assert_eq!(cfg.agent_b.command, "codex");
         assert_eq!(cfg.agent_a.timeout_secs, 900);
         assert_eq!(cfg.agent_b.timeout_secs, 900);
+    }
+
+    #[test]
+    fn default_consensus_keywords_avoid_overly_generic_english_terms() {
+        let cfg = MdtalkConfig::from_cli(PathBuf::from("."), None, None, None, None);
+        let kws = &cfg.review.consensus_keywords;
+
+        for generic in ["correct", "valid", "confirmed", "accepted"] {
+            assert!(
+                !kws.iter().any(|kw| kw == generic),
+                "default keywords should avoid broad english term: {generic}"
+            );
+        }
+
+        assert!(
+            kws.iter().any(|kw| kw == "CONCLUSION: I agree"),
+            "default keywords should keep explicit conclusion marker"
+        );
+        assert!(
+            kws.iter().any(|kw| kw == "结论：同意"),
+            "default keywords should keep explicit chinese conclusion marker"
+        );
     }
 }

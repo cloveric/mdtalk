@@ -70,6 +70,7 @@ impl DashboardApp {
             "zh".to_string()
         };
         let no_apply = initial_state.no_apply;
+        let apply_level = initial_state.apply_level.clamp(1, 3);
 
         Self {
             state: initial_state,
@@ -92,7 +93,7 @@ impl DashboardApp {
                 exchanges,
                 no_apply,
                 auto_apply: true,
-                apply_level: 1,
+                apply_level,
                 language,
                 branch_mode: false,
             },
@@ -271,5 +272,30 @@ impl DashboardApp {
 
     pub fn quit(&mut self) {
         self.should_quit = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::DashboardApp;
+    use crate::{config::MdtalkConfig, orchestrator::OrchestratorState};
+
+    #[test]
+    fn start_screen_uses_apply_level_from_state() {
+        let cfg = MdtalkConfig::from_cli(PathBuf::from("."), None, None, Some(1), Some(1));
+        let mut state = OrchestratorState::new(&cfg);
+        state.apply_level = 3;
+        let (start_tx, _start_rx) = oneshot::channel();
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+
+        let app = DashboardApp::new(state, start_tx, cmd_tx);
+        assert_eq!(
+            app.start.apply_level, 3,
+            "start screen should inherit apply level from orchestrator state"
+        );
     }
 }

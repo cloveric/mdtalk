@@ -80,6 +80,24 @@ fn print_version_info() {
     println!("executable: {exe_path}");
 }
 
+fn apply_restart_defaults(
+    cfg: &mut config::MdtalkConfig,
+    no_apply: &mut bool,
+    apply_level: &mut u32,
+    final_state: &orchestrator::OrchestratorState,
+) {
+    cfg.agent_a.name = final_state.agent_a_name.clone();
+    cfg.agent_a.command = final_state.agent_a_name.clone();
+    cfg.agent_a.timeout_secs = final_state.agent_a_timeout_secs;
+    cfg.agent_b.name = final_state.agent_b_name.clone();
+    cfg.agent_b.command = final_state.agent_b_name.clone();
+    cfg.agent_b.timeout_secs = final_state.agent_b_timeout_secs;
+    cfg.review.max_rounds = final_state.max_rounds;
+    cfg.review.max_exchanges = final_state.max_exchanges;
+    *no_apply = final_state.no_apply;
+    *apply_level = final_state.apply_level;
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -121,6 +139,7 @@ async fn main() -> Result<()> {
 
         let mut initial_state = orchestrator::OrchestratorState::new(&cfg);
         initial_state.no_apply = cli.no_apply;
+        initial_state.apply_level = cli.apply_level;
         let (state_tx, _state_rx) = watch::channel(initial_state);
         info!("MDTalk 审查启动 (无仪表盘模式)");
         orchestrator::run(cfg, state_tx, cli.no_apply, cli.apply_level, None, None).await?;
@@ -147,25 +166,27 @@ async fn main() -> Result<()> {
         }
 
         let mut no_apply = cli.no_apply;
+        let mut apply_level = cli.apply_level;
         let refresh_rate_ms = cfg.dashboard.refresh_rate_ms;
 
         loop {
             let cfg_clone = cfg.clone();
             let mut initial_state = orchestrator::OrchestratorState::new(&cfg_clone);
             initial_state.no_apply = no_apply;
+            initial_state.apply_level = apply_level;
             let (state_tx, state_rx) = watch::channel(initial_state);
             let (start_tx, start_rx) = oneshot::channel::<config::StartConfig>();
             let (cmd_tx, cmd_rx) = mpsc::channel::<orchestrator::OrchestratorCommand>(1);
             let cmd_tx_shutdown = cmd_tx.clone();
 
-            let apply_level = cli.apply_level;
             let run_no_apply = no_apply;
+            let run_apply_level = apply_level;
             let mut orchestrator_handle = tokio::spawn(async move {
                 orchestrator::run(
                     cfg_clone,
                     state_tx,
                     run_no_apply,
-                    apply_level,
+                    run_apply_level,
                     Some(start_rx),
                     Some(cmd_rx),
                 )
@@ -229,15 +250,7 @@ async fn main() -> Result<()> {
             }
 
             // Keep the most recent runtime choices as defaults for restart.
-            cfg.agent_a.name = final_state.agent_a_name.clone();
-            cfg.agent_a.command = final_state.agent_a_name.clone();
-            cfg.agent_a.timeout_secs = final_state.agent_a_timeout_secs;
-            cfg.agent_b.name = final_state.agent_b_name.clone();
-            cfg.agent_b.command = final_state.agent_b_name.clone();
-            cfg.agent_b.timeout_secs = final_state.agent_b_timeout_secs;
-            cfg.review.max_rounds = final_state.max_rounds;
-            cfg.review.max_exchanges = final_state.max_exchanges;
-            no_apply = final_state.no_apply;
+            apply_restart_defaults(&mut cfg, &mut no_apply, &mut apply_level, &final_state);
 
             match exit {
                 dashboard::DashboardExit::Restart => continue,
@@ -247,4 +260,46 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::apply_restart_defaults;
+    use crate::{config, orchestrator};
+
+    #[test]
+    fn restart_defaults_preserve_apply_level_and_no_apply() {
+        let mut cfg = config::MdtalkConfig::from_cli(
+            PathBuf::from("."),
+            Some("claude".to_string()),
+            Some("codex".to_string()),
+            Some(1),
+            Some(1),
+        );
+        let mut no_apply = false;
+        let mut apply_level = 1;
+        let mut final_state = orchestrator::OrchestratorState::new(&cfg);
+        final_state.agent_a_name = "agent-a-override".to_string();
+        final_state.agent_a_timeout_secs = 120;
+        final_state.agent_b_name = "agent-b-override".to_string();
+        final_state.agent_b_timeout_secs = 180;
+        final_state.max_rounds = 4;
+        final_state.max_exchanges = 6;
+        final_state.no_apply = true;
+        final_state.apply_level = 3;
+
+        apply_restart_defaults(&mut cfg, &mut no_apply, &mut apply_level, &final_state);
+
+        assert_eq!(cfg.agent_a.command, "agent-a-override");
+        assert_eq!(cfg.agent_b.command, "agent-b-override");
+        assert_eq!(cfg.review.max_rounds, 4);
+        assert_eq!(cfg.review.max_exchanges, 6);
+        assert!(no_apply, "restart should retain no-apply choice");
+        assert_eq!(
+            apply_level, 3,
+            "restart should retain start-screen apply level choice"
+        );
+    }
 }

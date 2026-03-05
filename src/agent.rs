@@ -332,8 +332,37 @@ fn estimate_windows_arg_length(arg: &str) -> usize {
     if !needs_quotes {
         return arg.len();
     }
-    let quote_count = arg.bytes().filter(|b| *b == b'"').count();
-    arg.len() + 2 + quote_count
+    let bytes = arg.as_bytes();
+    let mut extra = 2usize; // surrounding quotes
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        if bytes[idx] == b'\\' {
+            let run_start = idx;
+            while idx < bytes.len() && bytes[idx] == b'\\' {
+                idx += 1;
+            }
+            let run_len = idx - run_start;
+            if idx == bytes.len() {
+                // Backslashes before closing quote are doubled.
+                extra += run_len;
+                break;
+            }
+            if bytes[idx] == b'"' {
+                // Backslashes before a quote are doubled, and the quote itself is escaped.
+                extra += run_len + 1;
+                idx += 1;
+            }
+            continue;
+        }
+
+        if bytes[idx] == b'"' {
+            extra += 1;
+        }
+        idx += 1;
+    }
+
+    arg.len() + extra
 }
 
 async fn kill_child_process_tree(child: &mut tokio::process::Child) {
@@ -401,6 +430,8 @@ mod tests {
 
     #[cfg(not(windows))]
     use super::DEFAULT_PROMPT_SOFT_LIMIT_BYTES;
+    #[cfg(windows)]
+    use super::estimate_windows_arg_length;
     use super::{AgentRunMode, AgentRunner};
 
     fn runner(command: &str) -> AgentRunner {
@@ -514,6 +545,30 @@ mod tests {
         assert_eq!(
             args,
             vec!["exec".to_string(), "hello & \"world\" %PATH%".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_arg_length_counts_backslashes_before_quote() {
+        let arg = r#"a\"b"#;
+        // "a\\\"b" => 8 chars total with surrounding quotes.
+        assert_eq!(
+            estimate_windows_arg_length(arg),
+            8,
+            "length estimation should account for escaping backslashes before quotes"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_arg_length_counts_trailing_backslash_when_quoted() {
+        let arg = r#"path with space\"#;
+        // Needs wrapping quotes due space, and trailing '\' must be doubled before closing quote.
+        assert_eq!(
+            estimate_windows_arg_length(arg),
+            arg.len() + 3,
+            "length estimation should account for doubled trailing backslash"
         );
     }
 }

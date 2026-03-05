@@ -346,3 +346,29 @@ All 3 fixes complete.13 tests pass, 0 clippy warnings. Summary of changes:
 
 ---
 
+## 第1轮 代码修改 - 2026-03-05 13:00:08
+
+已按 `conversation.md` 共识项完成修复，并直接改了源码与回归测试。
+
+**主要修复**
+- 修复 `run_exchange` 的 `Err` 直穿导致未走 `finalize_session_error_state`：外层循环不再 `.await?`，而是统一收敛到 `execution_error` 分支。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:1453)。
+- 修复 `WaitingForApply` 把通道关闭当“确认”的问题：`rx.recv()==None` 现在走安全结束路径，不会自动 apply。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:999)。
+- 修复分支模式初始化中间失败不回滚：`git status` 快照失败时会尝试切回原分支并删除新建 review 分支。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:52), [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:1363)。
+- 修复分支 finalization 的错误日志未即时推送：`map_err` 内补发 `state_tx`。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:1154)。
+- 清理 Agent B prompt 多行文本缩进污染。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:458), [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:493)。
+- 收敛默认共识关键词，去掉过宽英文词（`correct/valid/confirmed/accepted`）。见 [config.rs](C:/Users/hangw/mdtalk/src/config.rs:77)。
+- 修复 Windows 参数长度估算，补上“引号前反斜杠/尾随反斜杠”扩展。见 [agent.rs](C:/Users/hangw/mdtalk/src/agent.rs:325)。
+- 修复 restart 丢失 `apply_level`：状态里持有 `apply_level`，主循环重启默认值会回填，启动页也读取该值。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:588), [main.rs](C:/Users/hangw/mdtalk/src/main.rs:83), [dashboard/app.rs](C:/Users/hangw/mdtalk/src/dashboard/app.rs:73)。
+- 日志缓冲改为 `Vec<String>`，去掉 `Arc::make_mut` 热路径克隆风险。见 [orchestrator.rs](C:/Users/hangw/mdtalk/src/orchestrator.rs:595)。
+
+**验证**
+- 已执行：`cargo fmt`
+- 已执行：`cargo test`
+- 结果：`96 passed, 0 failed`
+
+**补充**
+- `Cargo.lock` 中本包版本记录同步为 `0.1.15`。见 [Cargo.lock](C:/Users/hangw/mdtalk/Cargo.lock:486)。
+
+
+---
+
