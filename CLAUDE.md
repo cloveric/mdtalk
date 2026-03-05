@@ -297,6 +297,15 @@ refresh_rate_ms = 500
 - [x] `MdtalkConfig` 及子结构体派生 `Clone`，支持重启循环中重复使用配置
 - [x] Agent 错误信息改进：分离非零退出码和空输出的错误提示，包含 stdout/stderr 前 500 字符
 
+### 已修复（v0.1.17–v0.1.18）
+- [x] **[高]** `consensus_keywords` toml override 陈旧，缺少"成立"/"部分成立" → 删除 override，使用内置默认值
+- [x] **[高]** `check_b_only` 二次扫描：当 Agent B 未写任何结论标记时，对全文做关键词扫描；若 B 明确写了"结论：不同意"则跳过（防止误判）
+- [x] **[高]** `check_consensus` 错误接受"部分同意"关键词 → 过滤含"部分"/"partial"的关键词，exchange 2+ 非最后一次只认全部同意
+- [x] **[中]** exec output 污染结论段 → `extract_conclusion_section` 在第一个空行处截断
+- [x] **[中]** Agent B prompt 格式要求移至末尾，用 `=== 必填结论行 ===` 分隔
+- [x] **[低]** TUI 版本号显示（启动屏标题 + 运行中状态栏）
+- [x] **[低]** 鼠标滚轮支持（每次 3 行）+ 自动跟随最新内容（保留手动上滚位置）
+
 ### 待改进（功能增强）
 - [ ] `dashboard.refresh_rate_ms` 配置项未生效（tick_rate 硬编码 100ms）
 - [ ] 对话文件写入目标项目目录（应写入 sessions/ 或 mdtalk 自身目录）

@@ -178,3 +178,45 @@
 | B2 | 中 | agent.rs | timeout kill 后没有 wait，可能留僵尸进程 | ✅ 已修复 |
 | B3 | 中 | orchestrator.rs | Agent 失败后仍报 "Max rounds reached" | ✅ 已修复 |
 | B4 | 低 | dashboard/mod.rs | raw mode 清理缺少 Drop guard | ✅ 已修复（restore_terminal） |
+
+## 2026-03-05: 共识检测优化 + UI 改进 (v0.1.17 → v0.1.18)
+
+### 共识关键词 override 误配置（v0.1.17 前）
+
+`mdtalk.toml` 中写有 `consensus_keywords = [...]`，但列表陈旧，缺少 "成立"/"部分成立"，导致 codex 的回复无法触发共识。
+**修复**：删除 toml 中的 override，改用 `config.rs` 内置的完整默认关键词列表。
+
+### exec output 污染结论段（v0.1.17）
+
+Codex 在结论行后继续执行 shell 命令，命令输出被 `extract_conclusion_section` 纳入结论段，导致 turning-word 误判。
+**修复**：`extract_conclusion_section` 在第一个空行（`\n\n`）处截断，排除结论后的命令输出。
+
+### 共识规则修正（v0.1.17）
+
+发现 CLAUDE.md 和代码中，exchange 2+ 非最后一次的规则描述有误（文档说"全/部分同意均可"，实际应为"仅全部同意"）。
+**修复**：`check_consensus()` 过滤掉含"部分"/"partial"的关键词，并更新 CLAUDE.md 对应表格。
+
+### Agent B prompt 格式重构（v0.1.17）
+
+将结论格式要求移到 prompt 末尾，用 `=== 必填结论行 ===` 分隔，强调"必须是你回复的最后一行"。
+但 codex 的 `receiving-code-review` 技能文件仍然覆盖 prompt，导致 codex 用表格格式（含"结论"列）而非"结论：同意"行。
+
+### check_b_only 二次扫描（v0.1.18）
+
+**问题根源**：codex 被技能文件拦截后，用表格格式汇报（有"成立"关键词但无"结论："标记），最后一行是邀请语，`extract_conclusion_section` fallback 提取到这行，无关键词，共识失败。
+
+**修复**：`check_b_only` 新增二阶段策略：
+1. Primary pass：只在结论段搜索（现有逻辑）
+2. Secondary pass：仅当回复中**没有任何**结论标记时，对全文做关键词扫描
+   - 保护条件：若 B 明确写了 `结论：不同意`，secondary pass 被跳过
+
+新增 `has_explicit_conclusion_marker()` helper，3 个新测试，总计 100 个测试全部通过。
+
+### TUI 版本显示（v0.1.17-ui）
+
+在启动屏标题和运行中状态栏显示版本号（`env!("CARGO_PKG_VERSION")`），方便区分版本。
+
+### 鼠标滚轮和自动跟随（v0.1.17）
+
+- 新增鼠标滚轮支持（每次滚动 3 行）
+- `update_state` 记录用户是否在底部：新内容到达时自动跟随；用户手动上滚时保留位置
