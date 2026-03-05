@@ -275,20 +275,53 @@ fn agent_shows_consensus(response: &str, keywords: &[String], require_unambiguou
         .any(|kw| has_affirmative_keyword(conclusion, kw, require_unambiguous))
 }
 
+/// Returns true if the response contains an explicit conclusion marker
+/// ("结论：", "结论:", or "conclusion:").
+fn has_explicit_conclusion_marker(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ["conclusion:", "结论：", "结论:"]
+        .iter()
+        .any(|m| lower.contains(m))
+}
+
 /// Check consensus based on Agent B's response only, accepting full OR partial agreement.
 /// Used when: (a) max_exchanges == 1 (only one shot), or (b) it's the last exchange
 /// (exhausted all exchanges — apply whatever was agreed).
+///
+/// Two-pass strategy:
+///  1. Primary: check the extracted conclusion section (existing behaviour).
+///  2. Secondary (fallback): if B wrote NO explicit conclusion marker at all (e.g.
+///     the agent was overridden by a skill file and used a table format instead),
+///     search the entire response body for agreement keywords.
+///     We skip the secondary pass when an explicit marker IS present but didn't
+///     match — that means B deliberately wrote "结论：不同意", so we should not
+///     override it with a full-body scan.
 pub fn check_b_only(agent_b_response: &str, keywords: &[String]) -> ConsensusResult {
+    // Primary pass: conclusion section only.
     if agent_shows_consensus(agent_b_response, keywords, false) {
-        ConsensusResult {
+        return ConsensusResult {
             reached: true,
             summary: "Agent B 作为验证方表达了认可意见（全部或部分同意）。".to_string(),
+        };
+    }
+
+    // Secondary pass: if B never wrote a conclusion marker, scan the full response.
+    if !has_explicit_conclusion_marker(agent_b_response) {
+        let any_agree = keywords
+            .iter()
+            .any(|kw| has_affirmative_keyword(agent_b_response, kw, false));
+        if any_agree {
+            return ConsensusResult {
+                reached: true,
+                summary: "Agent B 整体回应中表达了认可意见（无明确结论行，全文检测）。"
+                    .to_string(),
+            };
         }
-    } else {
-        ConsensusResult {
-            reached: false,
-            summary: String::new(),
-        }
+    }
+
+    ConsensusResult {
+        reached: false,
+        summary: String::new(),
     }
 }
 
@@ -733,5 +766,51 @@ line 6
 line 7";
         let section = extract_conclusion_section(text);
         assert!(section.contains("I agree"));
+    }
+
+    // ── check_b_only secondary-pass tests ─────────────────────────────────
+
+    #[test]
+    fn check_b_only_secondary_pass_triggers_when_no_conclusion_marker() {
+        // Codex response: table format with "成立" per-item, ends with an offer,
+        // no "结论：" anywhere.  Secondary pass should find "成立" in the body.
+        let kws = vec!["成立".into(), "同意".into()];
+        let response = "\
+| 项目 | 结论 | 核验结论 |\n\
+|------|------|----------|\n\
+| H1   | 成立 | 确认     |\n\
+| H2   | 部分成立 | 确认 |\n\
+\n\
+如果你要，我可以基于这个核验结果再给一版优先级清单。";
+        let r = check_b_only(response, &kws);
+        assert!(
+            r.reached,
+            "secondary pass should detect '成立' in table body when no conclusion marker"
+        );
+    }
+
+    #[test]
+    fn check_b_only_secondary_pass_skipped_when_explicit_disagree_marker() {
+        // B wrote an explicit "结论：不同意" — secondary pass must NOT override it.
+        let kws = vec!["成立".into(), "同意".into()];
+        let response = "\
+1. 【成立】问题确认。\n\
+2. 【成立】另一问题。\n\
+\n\
+结论：不同意，还需进一步讨论。";
+        let r = check_b_only(response, &kws);
+        assert!(
+            !r.reached,
+            "explicit '结论：不同意' should not be overridden by secondary pass"
+        );
+    }
+
+    #[test]
+    fn check_b_only_secondary_pass_skipped_when_explicit_agree_marker_already_caught() {
+        // B wrote "结论：同意" — primary pass already catches it; secondary should not interfere.
+        let kws = vec!["同意".into()];
+        let response = "1. 【成立】确认。\n\n结论：同意";
+        let r = check_b_only(response, &kws);
+        assert!(r.reached);
     }
 }
