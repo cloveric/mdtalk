@@ -458,31 +458,30 @@ fn build_agent_b_prompt(exchange_kind: ExchangeKind, conv_filename: &str, en: bo
 Steps:\n\
 1. Read '{conv_filename}' and list all findings from the other reviewer\n\
 2. Open the related source files and verify each finding against actual code\n\
-3. Output your complete review response directly in this format:\n\
+3. Output your complete review response directly:\n\
    - Mark each finding as [Agree] or [Disagree], with concrete code evidence\n\
-   - Add any missed issues\n\
-   - End with a mandatory conclusion line (this line is required and must appear exactly):\n\
-     Full agreement: write exactly → CONCLUSION: I agree\n\
-     Partial agreement: write exactly → CONCLUSION: partially agree\n\
-     Disagree: write exactly → CONCLUSION: I disagree\n\n\
-CRITICAL: Do NOT modify any source code files. Your role is to verify and discuss only. \
-Code changes will be applied in a separate phase after consensus is reached.\n\n\
-Important: output the full review content directly; do not only report which files you read."
+   - Add any missed issues\n\n\
+CRITICAL: Do NOT modify any source code files. Your role is to verify and discuss only.\n\
+Output the full review content directly; do not only report which files you read.\n\n\
+=== REQUIRED FINAL LINE (do not omit, must be the very last line of your response) ===\n\
+Full agreement:    CONCLUSION: I agree\n\
+Partial agreement: CONCLUSION: partially agree\n\
+Disagree:          CONCLUSION: I disagree"
             ),
             ExchangeKind::FollowUp => format!(
                 "You are Agent B in a multi-agent code review debate. \
 Read {conv_filename} and focus ONLY on Agent A's LAST response.\n\n\
 DO NOT summarize the conversation. DO NOT repeat previous points. \
-Respond DIRECTLY to each item in A's last response:\n\n\
-- If A defended a finding you disagreed with: evaluate A's new evidence against actual source code\n\
-- If A conceded a point: acknowledge briefly\n\
-- If A raised new issues: verify them against actual code\n\
-- If you still disagree with A: explain why with specific code references\n\n\
+Respond DIRECTLY to each item in A's last response:\n\
+- A defended a finding: evaluate A's new evidence against actual source code\n\
+- A conceded a point: acknowledge briefly\n\
+- A raised new issues: verify against actual code\n\
+- You still disagree: explain why with specific code references\n\n\
 CRITICAL: Do NOT modify any source code files. Do NOT summarize history.\n\n\
-You MUST end your response with one of these exact conclusion lines:\n\
-  If you fully agree with A's position: CONCLUSION: I agree\n\
-  If you partially agree: CONCLUSION: partially agree\n\
-  If you disagree: CONCLUSION: I disagree"
+=== REQUIRED FINAL LINE (do not omit, must be the very last line of your response) ===\n\
+Full agreement:    CONCLUSION: I agree\n\
+Partial agreement: CONCLUSION: partially agree\n\
+Disagree:          CONCLUSION: I disagree"
             ),
         };
     }
@@ -493,30 +492,30 @@ You MUST end your response with one of these exact conclusion lines:\n\
 具体步骤：\n\
 1. 读取 '{conv_filename}' 文件，找到另一位审查者提出的所有发现\n\
 2. 对每一条发现，打开对应的源代码文件，核实该问题是否真实存在\n\
-3. 直接输出你的完整审查回应，格式如下：\n\
+3. 直接输出你的完整审查回应：\n\
    - 对每条发现标注【同意】或【不同意】，附上你在源代码中看到的证据\n\
-   - 补充任何审查者遗漏的新问题\n\
-   - 在最后必须单独写一行结论（此行为强制要求，格式固定）：\n\
-     完全认可：写 → 结论：同意\n\
-     部分认可：写 → 结论：部分同意\n\
-     存在重大分歧：写 → 结论：不同意\n\n\
-严禁修改任何源代码文件！你的职责仅限于验证和讨论。代码修改将在达成共识后的专门阶段执行。\n\n\
-重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。"
+   - 补充任何审查者遗漏的新问题\n\n\
+严禁修改任何源代码文件！你的职责仅限于验证和讨论。代码修改将在达成共识后的专门阶段执行。\n\
+重要：你必须直接输出完整的审查文本，不要只报告你读了哪些文件。\n\n\
+=== 必填结论行（不可省略，必须是你回复的最后一行）===\n\
+完全认可所有意见：结论：同意\n\
+有部分保留意见：  结论：部分同意\n\
+存在重大分歧：    结论：不同意"
         ),
         ExchangeKind::FollowUp => format!(
             "你是 Agent B，正在进行多 agent 代码审查辩论。\
 请阅读 {conv_filename}，只关注 Agent A 的最后一条回复。\n\n\
 禁止总结对话历史！禁止重复已讨论过的内容！\
-直接针对 A 最后一条回复中的每一条逐项回应：\n\n\
+直接针对 A 最后一条回复中的每一条逐项回应：\n\
 - A 用新证据反驳了你之前的判断：对照源代码重新评估\n\
 - A 接受了你的意见：简要确认即可\n\
 - A 提出了新问题：对照实际代码验证\n\
 - 你仍然不同意 A 的某条：用具体代码引用解释原因\n\n\
 严禁修改任何源代码文件！禁止总结历史！\n\n\
-你必须在回复末尾单独写一行结论（格式固定，不可省略）：\n\
-  完全同意 A 的立场：结论：同意\n\
-  部分同意：结论：部分同意\n\
-  存在分歧：结论：不同意"
+=== 必填结论行（不可省略，必须是你回复的最后一行）===\n\
+完全同意 A 的立场：结论：同意\n\
+有部分保留意见：   结论：部分同意\n\
+存在分歧：         结论：不同意"
         ),
     }
 }
