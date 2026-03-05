@@ -111,8 +111,9 @@ fn draw_start_screen(f: &mut Frame, app: &DashboardApp) {
         .split(area);
 
     // Title
+    let ver = env!("CARGO_PKG_VERSION");
     let title = Paragraph::new(Line::from(vec![Span::styled(
-        " MDTalk - Multi-Agent Code Review",
+        format!(" MDTalk v{ver} - Multi-Agent Code Review"),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -407,13 +408,15 @@ fn draw_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
         },
     ];
 
+    let ver = env!("CARGO_PKG_VERSION");
+    let title = if en {
+        format!(" MDTalk Dashboard v{ver} ")
+    } else {
+        format!(" MDTalk 仪表盘 v{ver} ")
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(if en {
-            " MDTalk Dashboard "
-        } else {
-            " MDTalk 仪表盘 "
-        })
+        .title(title)
         .title_style(
             Style::default()
                 .fg(Color::Cyan)
